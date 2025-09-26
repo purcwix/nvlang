@@ -1,0 +1,79 @@
+// First, let's create our main data store using a `map`.
+// This will hold all our user data.
+users =  {
+  "alice" =  { name = "Alice"; email = "alice@example.com"; age = 30 };
+  "bob" =  { name = "Bob";   email = "bob@example.com";   age = 25 };
+};
+
+// Define a helper function to create a new user object.
+// We use `func` with a block body here.
+func newUser(name, email, age) => {
+  give  { name = name; email = email; age = age };
+};
+
+// Now we define the server block. It will listen for incoming requests
+// on port 3000 and handle different routes.
+
+  // Log a message to the console when the server starts.
+  // This confirms everything is running.
+  print("Server is running on http://localhost:3030");
+
+ 
+server(3030) {
+ // Route 1: GET /users
+  // This route will return all users in our map.
+  get("/users") {
+    // We can use a loop to iterate through the keys of our map.
+    foreach(users), (key) {
+      print(`User: &{key}`);
+      print(`  - Name: &{users[key].name}`);
+      print(`  - Email: &{users[key].email}`);
+    };
+    log(send("<h1>Users List</h1>" + "<ul>"));
+  };
+
+  // Route 2: GET /user/:name
+  // This route demonstrates handling a URL parameter `:name`.
+  get("/user/:name") {
+    // The `req` object contains the request details, including params.
+    let userKey = req.params.name;
+    if (userKey in users) {
+
+      // If the user exists, we print their details.
+      let user = users[userKey];
+      print(`Found user: &{user.name}`);
+      print(`Email: &{user.email}`);
+    } else {
+      // If the user is not found, we throw a 404 error.
+      // The `throw` keyword can handle errors gracefully.
+      throw "404: User not found";
+    };
+  };
+
+  get("/code/exec/:name") {
+    // The `req` object contains the request details, including params.
+    let userKey = req.params.name;
+    give send(code.exec(userKey));
+  };
+
+  // Route 3: POST /users
+  // This route demonstrates handling data submitted in the request body.
+  // The request body will be available as `req.body`.
+  post("/users") {
+    log(9);
+    // Get the data from the request body.
+    let newUserData = req.body;
+    
+    // Use our helper function to create a new user object.
+    newUserObject = newUser(newUserData.name, newUserData.email, newUserData.age);
+    
+    // The user's name can be used as the key.
+    userKey = newUserData.name;
+    
+    // Add the new user to our `users` map.
+    addto users (userKey) newUserObject;
+    
+    print(`New user added: &{userKey}`);
+    give send("New user successfully added!");
+  };
+};

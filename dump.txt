@@ -1,0 +1,991 @@
+=== evaluateExpr ===
+evaluateExpr(expr) {
+    this.debug('evaluating expr: ' + expr);
+    if (typeof expr !== 'string') expr = String(expr);
+    expr = this.stripLC('##', expr);
+    expr = expr.trim();
+    if (expr.startsWith("define ")) {
+      let parts = expr.trim().split(/\s+/); // split by spaces
+      let name = parts[1]; // word after "define"
+      let e = parts.slice(3).join(' '); // everything after name
+      let d = this.evaluateExpr(e);
+      this._assignToPath(name, d);
+      return d;
+    }
+
+    if (expr.trim().match(/^\(.*\)\s*=>\s*{.*}$/s)) {
+      this.debug('found arrow function');
+      // It's a Nova-style inline function
+      const arrowIndex = expr.indexOf('=>');
+      this.debug(`arrowIndex: ${arrowIndex}`);
+      const argsStr = expr.slice(0, arrowIndex).trim();
+      this.debug(`argsStr: ${argsStr}`);
+      const bodyStr = expr.slice(arrowIndex + 2).trim();
+      this.debug(`bodyStr: ${bodyStr}`);
+
+      const argList = argsStr
+        .replace(/^\(|\)$/g, '')
+        .split(',')
+        .map(arg => arg.trim())
+        .filter(Boolean);
+      this.debug(`argList: ${JSON.stringify(argList)}`);
+
+      const body = bodyStr.replace(/^\{|\}$/g, '').trim();
+      this.debug(`body: ${body}`);
+
+      return this.extract({
+        args: argList,
+        body
+      });
+    }
+
+    if (expr.startsWith('[') && expr.endsWith(']')) {
+      this.debug('found array in expr');
+      // You might want a simple check for balanced brackets here,
+      // or rely on parseArray's internal depth tracking to catch errors.
+      // For now, assuming well-formed input or that parseArray will handle malformed cases.
+      const parsedArray = this.parseArray(expr.slice(1, -1).trim());
+      this.debug(`parsedArray: ${JSON.stringify(parsedArray)}`);
+      return parsedArray;
+    }
+
+    // Try/catch as expression: try { ... } catch("err") { ... }
+    if (/^try\s*{/.test(expr)) {
+      this.debug('found try block in expr');
+      // Parse try block
+      let tryMatch = expr.match(/^try\s*{([\s\S]*?)}\s*catch\s*\(\s*["']?([a-zA-Z_]\w*)["']?\s*\)\s*{([\s\S]*?)}/);
+      if (tryMatch) {
+        this.debug('tryMatch found');
+        const tryBody = tryMatch[1].trim();
+        this.debug(`tryBody: ${tryBody}`);
+        const errName = tryMatch[2].trim();
+        this.debug(`errName: ${errName}`);
+        const catchBody = tryMatch[3].trim();
+        this.debug(`catchBody: ${catchBody}`);
+        try {
+          this.debug('attempting to evaluate tryBody');
+          return this.evaluateExpr(tryBody);
+        } catch (e) {
+          this.debug(`caught error: ${e.message}, assigning to ${errName}`);
+          this.variables[errName] = e;
+          this.debug('evaluating catchBody');
+          return this.evaluateExpr(catchBody);
+        }
+      }
+    }
+
+    if (expr.startsWith('[')) {
+      this.debug('expr starts with [ (delegating to parseArray)');
+      const parsed = this.parseArray(expr.substr(1, expr.length - 2));
+      this.debug(`parsed array from startsWith[: ${JSON.stringify(parsed)}`);
+      return parsed;
+    }
+    if (expr.startsWith('{')) {
+      this.debug('expr starts with [ (delegating to parseMapInline)');
+      const parsed = this.parseMapInline(expr.substr(1, expr.length - 2));
+      this.debug(`parsed array from startsWith[: ${JSON.stringify(parsed)}`);
+      return parsed;
+    }
+    if (
+      expr.includes('[') &&
+      (expr.match(/\[/g)?.length === expr.match(/\]/g)?.length)
+    ) {
+      this.debug('found balanced brackets, evaluating token');
+      return this._evalToken(expr);
+    }
+
+    if (expr.startsWith('{') && expr.endsWith('}')) {
+      this.debug('found potential object/block in expr');
+      let depth = 0;
+      for (let i = 0; i < expr.length; i++) {
+        if (expr[i] === '{') depth++;
+        if (expr[i] === '}') depth--;
+        if (depth === 0 && i < expr.length - 1) {
+          this.debug('outer {} are not wrapping entire expr, breaking');
+          // This means outer {} are not wrapping entire expr
+          break; // don't strip them
+        }
+      }
+      if (depth === 0) {
+        this.debug('outer {} wrap entire expr, running inner');
+        const inner = expr.slice(1, -1).trim();
+        this.debug(`inner expression: ${inner}`);
+        return this.run(inner);
+      }
+    }
+    const prefixMatch = expr.match(/^([a-zA-Z_][\w]*)\s+(.*)$/);
+    if (prefixMatch && this.prefs[prefixMatch[1]]) {
+      this.debug(`found prefix match: ${prefixMatch[1]}`);
+      const prefixName = prefixMatch[1];
+      const argExpr = prefixMatch[2].trim();
+      this.debug(`prefixName: ${prefixName}, argExpr: ${argExpr}`);
+      // Evaluate the argument expression before passing to prefix function
+      const evaluatedArg = this.evaluateExpr(argExpr);
+      this.debug(`evaluatedArg for prefix: ${evaluatedArg}`);
+      return this.prefs[prefixName](evaluatedArg);
+    }
+    if (expr.startsWith('defined ')) {
+      this.debug('finding defined');
+      const name = expr.slice(8).trim();
+      this.debug(`checking if variable '${name}' is defined`);
+      return this.variables?.hasOwnProperty(name);
+    }
+    if (expr.startsWith('isnull ')) {
+      this.debug('finding isnull');
+      const val = this.evaluateExpr(expr.slice(7).trim());
+      this.debug(`isnull value: ${val}`);
+      return val === null || val === undefined;
+    }
+    if (expr.startsWith('keys ')) {
+      this.debug('finding keys');
+      const val = this.evaluateExpr(expr.slice(5).trim());
+      this.debug(`keys of value: ${JSON.stringify(val)}`);
+      return (typeof val === 'object' && val !== null) ? Object.keys(val) : [];
+    }
+
+    if (expr.startsWith('run ')) {
+      this.debug('running code of expr');
+      const val = this.evaluateExpr(expr.slice(4).trim());
+      this.debug(`value to run: ${val}`);
+      return this.run(val);
+    }
+
+    if (expr.startsWith('typeis ')) {
+      this.debug('checking type match');
+      const [left, right] = expr.slice(7).trim().split(/\s+/, 2);
+      this.debug(`typeis left: ${left}, right: ${right}`);
+      const val = this.evaluateExpr(left);
+      const expected = this.evaluateExpr(right);
+      this.debug(`typeis evaluated val: ${val}, expected: ${expected}`);
+      if (val === null && expected === 'null') return true;
+      if (Array.isArray(val) && expected === 'array') return true;
+      return this.typeof(val) === expected;
+    }
+    if (expr.startsWith('default ')) {
+      this.debug('doing defaulted expr');
+      const parts = expr.slice(8).trim().split(/\s+/, 2);
+      this.debug(`default parts: ${JSON.stringify(parts)}`);
+      const a = this.evaluateExpr(parts[0]);
+      this.debug(`default first part evaluated to: ${a}`);
+      const result = (a !== undefined && a !== null) ? a : this.evaluateExpr(parts[1]);
+      this.debug(`default result: ${result}`);
+      return result;
+    }
+    if (expr.startsWith('range ')) {
+      this.debug('doing prefix range op');
+      const parts = expr.slice(6).trim().split(/\s+/);
+      this.debug(`range parts: ${JSON.stringify(parts)}`);
+      const a = Number(this.evaluateExpr(parts[0]));
+      const b = Number(this.evaluateExpr(parts[1]));
+      this.debug(`range a: ${a}, b: ${b}`);
+      return Array.from({
+        length: b - a + 1
+      }, (_, i) => a + i);
+    }
+
+    if (expr.startsWith('not ')) {
+      this.debug('handling not expression');
+      const valToNegate = this.evaluateExpr(expr.slice(4).trim());
+      this.debug(`not evaluating: ${valToNegate}`);
+      return !valToNegate;
+    }
+    this.debug('tokenizing expression');
+    // --- Start Currency Tokenization Modification ---
+    // Dynamically build the currency unit regex part
+    let currencyUnits = [];
+    for (const category in this.currencies) {
+      if (this.currencies.hasOwnProperty(category)) {
+        for (const unit in this.currencies[category]) {
+          if (unit !== "base_unit" && this.currencies[category].hasOwnProperty(unit)) {
+            currencyUnits.push(unit);
+          }
+        }
+      }
+    }
+    // Sort longer units first to prevent partial matches (e.g., 'milliseconds' before 'ms', 'ms' before 's')
+    currencyUnits.sort((a, b) => b.length - a.length);
+    const currencyUnitRegex = currencyUnits.length > 0 ? `(?:${currencyUnits.join('|')})` : ''; // Non-capturing group for units
+
+    // Updated regex to include numbers followed by a currency unit
+    // Key change: The unit part is now outside the numeric part and specifically looks for the units.
+    let tokens = expr.match(
+      new RegExp(`"[^"]*"|'[^']*'|\`[^\`]*\`|` + // Strings
+        `[0-9A-Za-z_]+x[0-9A-Za-z_]+|` +
+        `[0-9A-Za-z_]+e[0-9A-Za-z_]+|` +
+        `([0-9]+(?:\\.[0-9]+)?${currencyUnitRegex})|` + // Numbers with optional currency units
+        `[0-9]+\\.[0-9]+|` +
+        `[0-9]+\\.{2,3}[0-9]+|` +
+        `(?:[:~!])\\s*(?:\\([^)]+\\)|[a-zA-Z_][a-zA-Z0-9_]*|[0-9]+(?:\\.[0-9]+)?)|` +
+        `[0-9]+(?:_[0-9]+)*|[a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)*|[!]=?==?|===|--|\\+\\+|\\*\\*|==|<=|>=|=>|>>|<<|>>>|\\?\\?|&&|\#\:|\\|\\||[+\\-\$*/%<>|=.!&|^~?:,;(){}\\[\\]>]`, 'g')
+    ) || [];
+    // Filter out undefined matches that can occur with outer capturing groups
+    tokens = tokens.filter(token => token !== undefined);
+    // --- End Currency Tokenization Modification ---
+
+    this.debug(`initial tokens: ${JSON.stringify(tokens)}`);
+
+    if (tokens.length === 1) {
+      this.debug('single token expression');
+      if (tokens[0] === 'true') return true;
+      if (tokens[0] === 'false') return false;
+      if (tokens[0] === 'null') return null;
+      // The currency parsing logic for a single token also needs adjustment
+      // because the token itself will now be "1ms" not "1m" then "s"
+      const currencyMatch = tokens[0].match(/^([0-9]+(?:\.[0-9]+)?)([a-zA-Z_]+)$/);
+      if (currencyMatch) {
+        const value = Number(currencyMatch[1]);
+        const unit = currencyMatch[2];
+        this.debug(`attempting to convert currency: ${value}${unit}`);
+        return this._convertCurrency(value, unit);
+      }
+      const evaledToken = this._evalToken(tokens[0]);
+      this.debug(`evaluated single token: ${evaledToken}`);
+      return evaledToken;
+    }
+
+    let grouped = this._groupTokens(tokens);
+    this.debug(`grouped tokens: ${JSON.stringify(grouped)}`);
+    grouped = this._fixBrackets(grouped);
+    this.debug(`fixed brackets grouped tokens: ${JSON.stringify(grouped)}`);
+    grouped = reorderTokensByPrecedence(grouped);
+    this.debug(`reordered tokens by precedence: ${JSON.stringify(grouped)}`);
+
+    // 👇 Handle grouped ( ... ) expressions via grouped tokens
+    if (grouped.length >= 1 && /^\(.*\)$/.test(grouped[0])) {
+      this.debug('found grouped parentheses expression');
+      const inner = grouped[0].slice(1, -1).trim();
+      this.debug(`inner grouped expression: ${inner}`);
+      const val = this.evaluateExpr(inner);
+      this.debug(`evaluated inner grouped expression: ${val}`);
+
+      // If more stuff follows like "* 6"
+      if (grouped.length > 1) {
+        this.debug('more tokens after grouped expression, re-evaluating');
+        const rest = [val, ...grouped.slice(1)].join(' ');
+        this.debug(`rest of expression: ${rest}`);
+        return this.evaluateExpr(rest);
+      }
+
+      // Just a pure (expr)
+      return val;
+    }
+    if (this.options.debugExpr) {
+      console.log(grouped);
+      return;
+    }
+    let i = 0;
+    const leftObj = this._readTokenOrFunc(grouped, i);
+    i += leftObj._consumed;
+    let left = leftObj.value;
+    this.debug(`initial left operand: ${left}`);
+
+    // Pretty chained ternary — safe, final boss edition
+    if (grouped.includes('if') && grouped.includes('else')) {
+      this.debug('found ternary expression');
+      let i = 0;
+      while (i < grouped.length) {
+        // Step 1: Collect value expression
+        const valParts = [];
+        while (i < grouped.length && grouped[i] !== 'if') {
+          valParts.push(grouped[i++]);
+        }
+        const valExpr = (valParts.join(' ') || '').trim();
+        this.debug(`ternary valExpr: ${valExpr}`);
+
+        // Step 2: Check for 'if'
+        if (i >= grouped.length || grouped[i] !== 'if') break;
+        i++; // consume 'if'
+        this.debug('consumed "if"');
+
+        // Step 3: Collect condition expression
+        const condParts = [];
+        while (i < grouped.length && grouped[i] !== 'else') {
+          condParts.push(grouped[i++]);
+        }
+        const condExpr = (condParts.join(' ') || '').trim();
+        this.debug(`ternary condExpr: ${condExpr}`);
+
+        // Step 4: Check for 'else'
+        if (i >= grouped.length || grouped[i] !== 'else') break;
+        i++; // consume 'else'
+        this.debug('consumed "else"');
+
+        // Step 5: Evaluate the condition
+        this.debug(`evaluating ternary condition: ${condExpr}`);
+        const condition = this.evaluateExpr(condExpr);
+        this.debug(`ternary condition result: ${condition}`);
+
+        if (condition) {
+          this.debug('condition is true, evaluating valExpr');
+          return this.evaluateExpr(valExpr);
+        }
+
+        // If false, loop continues—but do NOT skip fallback
+        this.debug('condition is false, continuing in ternary loop');
+      }
+
+      // 🪂 Fallback: get last else clause
+      let lastElseIndex = grouped.lastIndexOf('else');
+      if (lastElseIndex !== -1 && lastElseIndex + 1 < grouped.length) {
+        this.debug('found last "else" clause for fallback');
+        const fallback = grouped.slice(lastElseIndex + 1).join(' ').trim();
+        this.debug(`fallback expression: ${fallback}`);
+        return this.evaluateExpr(fallback);
+      }
+
+      // 🛑 Nothing to fallback to
+      this._log("Ternary expression has no valid fallback.");
+      this.debug('ternary expression has no valid fallback, returning undefined');
+      return undefined;
+    }
+    let inoi = 0;
+    while (i < grouped.length) {
+      let OLDIT = grouped[inoi];
+      inoi = i;
+      const op = grouped[i++];
+
+      let IST = (d) => {
+        if ((op === d) || (OLDIT === d)) return true
+        else return false;
+      }
+      let ISTGR = (d) => {
+        if (d(op) || d(OLDIT)) return true
+        else return false;
+      }
+      if (IST(';') && !this.options?.dONTsTOPoNsEMICOLONS) return left;
+      if (IST('typeof')) {
+        let named = this._readTokenOrFunc(grouped, inoi, true);
+        inoi += named._consumed;
+        named = named.value;
+        if (Array.isArray(named?.args) && named?.body) named = this.extract(named);
+        left = this.typeof(named);
+        i = inoi;
+        continue;
+      }
+      this.debug(`processing operator: ${op}`);
+
+      if (op === '.') {
+        const propertyName = grouped[i]; // Get the token directly as the property name string
+        this.debug(`handling property access via . operator, propertyName: ${propertyName}`);
+        if (!propertyName || !/^[\w.$]+$/.test(propertyName)) {
+          // Basic validation for property names (adjust regex as needed)
+          this.debug(`error: Invalid property name '${propertyName}'`);
+          throw new Error(`Invalid property name '${propertyName}' after '.' at position ${i} in expression.`);
+        }
+        i++; // Consume the property name token
+        this.debug(`consumed property name: ${propertyName}`);
+
+        if (left === null || left === undefined) {
+          this.debug(`error: Cannot access property '${propertyName}' of null or undefined.`);
+          throw new Error(`Cannot access property '${propertyName}' of null or undefined.`);
+        }
+        // Allow access on objects, arrays, and for primitive methods (like "string".length, "number".toFixed)
+        left = left[propertyName]; // This is the core chaining logic
+        this.debug(`result of property access: ${left}`);
+        continue; // Continue to the next operator/operand, skipping the general rightObj and switch
+      }
+
+      // For all other operators, read the right operand as usual
+      let oldI = i;
+      const rightObj = this._readTokenOrFunc(grouped, i);
+      i += rightObj._consumed;
+      const right = () => {
+        this.debug(`evaluating right operand for operator ${op}: ${rightObj.value}`);
+        return rightObj.value;
+      }; // Use a closure to lazily evaluate for some operators if needed
+      const rightExpr = () => { this.debug(`evaluating right expr for op ${op}: ${this.evaluateExpr(grouped.slice(oldI).join(' '))}`); i = grouped.length - 1; return this.evaluateExpr(grouped.slice(oldI).join(' ')) };
+
+      if (this.operators?.[op]) {
+        this.debug(`using custom operator handler for ${op}`);
+        left = this.operators[op](left, right);
+        this.debug(`result of custom operator ${op}: ${left}`);
+        continue;
+      }
+
+      switch (op) {
+        case 'as': {
+          this.debug(`casting ${left} as ${right()}`);
+          const targetType = String(right()).toLowerCase();
+
+          switch (targetType) {
+            case 'number':
+            case 'num':
+            case 'float':
+            case 'double':
+              left = Number(left);
+              break;
+
+            case 'int':
+            case 'integer':
+              left = Math.trunc(Number(left));
+              break;
+
+            case 'string':
+              left = String(left);
+              break;
+
+            case 'boolean':
+              left = Boolean(left);
+              break;
+
+            case 'array':
+              left = Array.isArray(left) ? left : [left];
+              break;
+
+            case 'object':
+              left = this.typeof(left) === 'object' ? left : { value: left };
+              break;
+
+            default:
+              if (this.castings?.[targetType]) {
+                this.debug(`using custom casting handler for '${targetType}'`);
+                left = this.castings[targetType](left);
+              } else {
+                throw new Error(`Unknown type cast: '${targetType}'`);
+              }
+          }
+
+          this.debug(`result of 'as': ${left}`);
+          break;
+        }
+        case '$': {
+          // Evaluate right operand first (assuming right() evaluates and returns the right side)
+          const rightVal = right();
+
+          // Handle different left operand types
+          if (typeof left === 'string') {
+            // Check substring presence
+            left = left.includes(rightVal);
+          } else if (Array.isArray(left)) {
+            // Check array contains element
+            left = left.includes(rightVal);
+          } else if (left && typeof left === 'object') {
+            // For maps/objects, check if rightVal is a key
+            left = rightVal in left;
+          } else {
+            // Default fallback — false for unsupported types
+            left = false;
+          }
+          break;
+        }
+        case '#:': {
+          const patternMap = right(); // expects a map/array of [condition => expression]
+
+          for (let [cond, expr] of patternMap) {
+            if (this.typeof(left) === cond.toLowerCase()) { // matches can check type, value, or call a function
+              left = this.evaluateExpr(expr);
+              break;
+            }
+          }
+          break;
+        }
+        case 'then': left = left ? rightExpr() : false; return left;
+        case 'if': left = rightExpr() ? left : false; return left;
+        case 'from': {
+          let taken = left;
+          let map = right();
+          if (String(taken).trim() === "*") {
+            left = Object.keys(map);
+            break;
+          }
+          if (map?.[left]) {
+            left = map[left];
+            break;
+          } else {
+            if (grouped[i] === 'where') {
+              i++;
+              let fn = this.evaluateExpr(grouped.slice(i).join(' '));
+              if (typeof fn !== 'function') {
+                try { fn = this.extract(fn); } catch { throw `'where' expects a function.`; }
+              }
+              let finalMap = {};
+              Object.keys(map).forEach((m) => { if (fn(map[m])) { finalMap[m] = map[m] } });
+              left = finalMap;
+              return left;
+            }
+          }
+        }
+        case '+':
+          let r = rightExpr();
+          this.debug(`performing + operation: ${left} + ${r}`);
+          if (typeof left === 'string' || typeof r === 'string') {
+            left = String(left) + String(r);
+          } else if (typeof left === 'boolean' || typeof rightExpr() === 'boolean') {
+            left = left && r;
+          } else if (typeof left === 'bigint' || typeof r === 'bigint') {
+            left = BigInt(left) + BigInt(r);
+          } else {
+            left = Number(left) + Number(rightExpr());
+          }
+          this.debug(`result: ${left}`);
+          return left;
+        case '-':
+          this.debug(`performing - operation: ${left} - ${rightExpr()}`);
+          left = Number(left) - Number(rightExpr());
+          this.debug(`result: ${left}`);
+          return left;
+        // Removed original 'case .:' block here because it's now handled by the 'if (op === '.')' block above
+        case '%':
+          this.debug(`performing % operation: ${left} % ${right()}`);
+          left = Number(left) % Number(right());
+          this.debug(`result: ${left}`);
+          break;
+        case '*':
+          this.debug(`performing * operation: ${left} * ${right()}`);
+          left = Number(left) * Number(right());
+          this.debug(`result: ${left}`);
+          break;
+        case 'in':
+          this.debug(`performing in operation: ${left} in ${right()}`);
+          left = left in right();
+          this.debug(`result: ${left}`);
+          break;
+        case '/':
+          this.debug(`performing / operation: ${left} / ${right()}`);
+          left = Number(left) / Number(right());
+          this.debug(`result: ${left}`);
+          break;
+        case 'xor': left = Boolean(left) !== Boolean(right()); break;
+	case 'matches':
+        case '==':
+          this.debug(`performing == operation: ${left} == ${right()}`);
+          left = left == right();
+          this.debug(`result: ${left}`);
+          break;
+        case '=':
+          this.debug(`performing = assignment: ${grouped[i - 3]} = ${rightExpr()}`);
+          const assignedValue = rightExpr(); // Evaluate the right-hand side first
+          this._assignToPath(grouped[i - 3], assignedValue); // grouped[i-2] should be the string of the left operand
+          left = assignedValue; // The result of the assignment expression is the assigned value
+          this.debug(`result of assignment: ${left}`);
+          break;
+        case '!=':
+          this.debug(`performing != operation: ${left} != ${right()}`);
+          left = left != right();
+          this.debug(`result: ${left}`);
+          break;
+        case 'pow':
+          this.debug(`performing pow operation: ${left} ** ${right()}`);
+          left = Number(left) ** Number(right());
+          this.debug(`result: ${left}`);
+          break;
+
+        case 'or':
+          this.debug(`performing or operation: ${left} || ${right()}`);
+          left = left ? left : right();
+          this.debug(`result: ${left}`);
+          break;
+
+        case '^':
+          this.debug(`performing ^ (bitwise XOR) operation: ${left} ^ ${right()}`);
+          left = Number(left) ^ Number(right());
+          this.debug(`result: ${left}`);
+          break;
+
+        case '**':
+          this.debug(`performing ** (doubling) operation on assignable: ${grouped[i - 2]}`);
+          // Ensure it's applied to an assignable variable
+          if (typeof this._assignToPath === 'function' && grouped[i - 2]) {
+            const varName = grouped[i - 2];
+            const originalValue = Number(this._evalToken(varName));
+            this.debug(`assignable variable detected: ${varName}, originalValue: ${originalValue}`);
+
+            // Double the original value and assign it back
+            this._assignToPath(varName, originalValue * 2);
+            left = originalValue * 2; // The result of the expression is the new doubled value
+            this.debug(`assigned new value to ${varName}: ${left}`);
+          } else {
+            // If not an assignable variable, just double the value and return it
+            // (e.g., if '5++' were allowed, it would become 10)
+            this.debug(`not an assignable variable (${grouped[i - 2]}), just doubling value: ${left}`);
+            left = Number(left) * 2;
+            this.debug(`result: ${left}`);
+          }
+          break;
+
+        case '?': {
+          this.debug(`performing ? (check) operation on: ${grouped[i - 2]}`);
+
+          left = Boolean(left);
+
+          i = oldI;
+
+          this.debug(`result: ${left}`);
+          break;
+        }
+        case '++':
+          this.debug(`performing ++ (increment) operation on assignable: ${grouped[i - 2]}`);
+
+          // Ensure it's applied to an assignable variable
+          if (grouped[i - 2]) {
+            const varName = grouped[i - 2];
+            const originalValue = Number(this._evalToken(varName)) ?? 0;
+            this.debug(`assignable variable detected: ${varName}, originalValue: ${originalValue}`);
+
+            // Double the original value and assign it back
+            this._assignToPath(varName, originalValue + 1);
+            left = originalValue + 1; // The result of the expression is the new doubled value
+            this.debug(`assigned new value to ${varName}: ${left}`);
+          } else {
+            // If not an assignable variable, just double the value and return it
+            // (e.g., if '5++' were allowed, it would become 10)
+            this.debug(`not an assignable variable (${grouped[i - 2]}), just incrementing value: ${left}`);
+            left = Number(left) + 1;
+            this.debug(`result: ${left}`);
+          }
+          break;
+
+        case '[': {
+          let init = '';
+          let count = 1;
+          while (i < grouped.length && count > 0) {
+            let tok = grouped[i++];
+            if (tok === '[') count++;
+            else if (tok === ']') { count--; if (count === 0) break; }
+            init += tok + ' ';
+          }
+          left = left[this.evaluateExpr(init)];
+          break;
+        }
+
+        case '--':
+          this.debug(`performing -- (decrement) operation on assignable: ${grouped[i - 2]}`);
+          // Ensure it's applied to an assignable variable
+          if (typeof this._assignToPath === 'function' && grouped[i - 2]) {
+            const varName = grouped[i - 2];
+            const originalValue = Number(this._evalToken(varName));
+            this.debug(`assignable variable detected: ${varName}, originalValue: ${originalValue}`);
+
+            // Decrement the original value by 1 and assign it back
+            this._assignToPath(varName, originalValue - 1);
+            left = originalValue - 1; // The result of the expression is the new decremented value
+            this.debug(`assigned new value to ${varName}: ${left}`);
+          } else {
+            // If not an assignable variable, just decrement by 1 and return it
+            this.debug(`not an assignable variable (${grouped[i - 2]}), just decrementing value: ${left}`);
+            left = Number(left) - 1;
+            this.debug(`result: ${left}`);
+          }
+          break;
+        case 'between': left = Number(left) > Number(right()) && Number(left) < Number(extra()); break;
+	case 'not': left = !Boolean(right()); break;
+        case 'join':   if(Array.isArray(left)) left = left.join(String(right())); break;
+	case 'concat': if(Array.isArray(left)) left = left.concat(right()); break;
+	case 'index':  if(Array.isArray(left)) left = left[Number(right())]; break;
+	case 'avg':        left = (Number(left) + Number(right())) / 2; break;
+	case 'diff':       left = Math.abs(Number(left) - Number(right())); break;
+	case 'ratio':      left = Number(left) / Number(right()); break;
+	case 'mult_of':    left = Number(left) % Number(right()) === 0; break;
+	case 'gcd': {
+	    const a = Math.abs(Number(left)), b = Math.abs(Number(right()));
+	    const gcd = (x, y) => y === 0 ? x : gcd(y, x % y);
+	    left = gcd(a, b);
+	    break;
+	}
+	case 'lcm': {
+	    const a = Math.abs(Number(left)), b = Math.abs(Number(right()));
+	    const gcd = (x, y) => y === 0 ? x : gcd(y, x % y);
+	    left = (a * b) / gcd(a, b);
+	    break;
+	}
+case 'repeat_sep': left = String(left).repeat(Number(right())); break;
+case 'replace':    left = String(left).replace(String(right()), ''); break;
+case 'pad_start':  left = String(left).padStart(Number(right()), ' '); break;
+case 'pad_end':    left = String(left).padEnd(Number(right()), ' '); break;
+case 'equals_ignore': left = String(left).toLowerCase() === String(right()).toLowerCase(); break;
+case 'cmp':        left = String(left).localeCompare(String(right())); break; // -1,0,1
+case 'zip': {
+    const arr1 = Array.isArray(left) ? left : [left];
+    const arr2 = Array.isArray(right()) ? right() : [right()];
+    left = arr1.map((v, i) => [v, arr2[i]]);
+    break;
+}
+case 'intersect': {
+    const arr1 = Array.isArray(left) ? left : [];
+    const arr2 = Array.isArray(right()) ? right() : [];
+    left = arr1.filter(v => arr2.includes(v));
+    break;
+}
+case 'diff_arr': {
+    const arr1 = Array.isArray(left) ? left : [];
+    const arr2 = Array.isArray(right()) ? right() : [];
+    left = arr1.filter(v => !arr2.includes(v));
+    break;
+}
+case 'union': {
+    const arr1 = Array.isArray(left) ? left : [];
+    const arr2 = Array.isArray(right()) ? right() : [];
+    left = [...new Set([...arr1, ...arr2])];
+    break;
+}
+
+	case 'nand': left = !(Boolean(left) && Boolean(right())); break;
+	case 'nor':  left = !(Boolean(left) || Boolean(right())); break;
+	case 'xnor': left = Boolean(left) === Boolean(right()); break; // opposite of xor
+        case 'equals':
+        case 'is':
+        case '===':
+          this.debug(`performing === operation: ${left} === ${rightExpr()}`);
+          left = left === rightExpr();
+          this.debug(`result: ${left}`);
+          return left;
+        case '!==':
+          this.debug(`performing !== operation: ${left} !== ${rightExpr()}`);
+          left = left !== rightExpr();
+          this.debug(`result: ${left}`);
+          return left;
+        case 'bigger':
+        case '>':
+          this.debug(`performing > operation: ${left} > ${rightExpr()}`);
+          left = left > rightExpr();
+          this.debug(`result: ${left}`);
+          return left;
+        case 'smaller':
+        case '<':
+          this.debug(`performing < operation: ${left} < ${rightExpr()}`);
+          left = left < rightExpr();
+          this.debug(`result: ${left}`);
+          return left;
+        case '>=':
+          this.debug(`performing >= operation: ${left} >= ${rightExpr()}`);
+          left = left >= rightExpr();
+          this.debug(`result: ${left}`);
+          return left;
+        case '<=':
+          this.debug(`performing <= operation: ${left} <= ${rightExpr()}`);
+          left = left <= rightExpr();
+          this.debug(`result: ${left}`);
+          return left;
+        case 'and':
+        case '&&':
+          left = left && rightExpr();
+          this.debug(`result: ${left}`);
+          return left;
+        case 'step': {
+          let start = Array.isArray(left) ? (left[0]) : 0;
+          let end = Array.isArray(left) ? (left[left.length - 1]) : left;
+          let step = right();
+          left = Array.from({ length: Math.floor((end - start) / step) + 1 }, (_, i) => start + i * step);
+          break;
+        }
+        case '||':
+          this.debug(`performing || operation: ${left} || ${right()}`);
+          left = left || rightExpr();
+          this.debug(`result: ${left}`);
+          return left;
+        case '=>': {
+          let r = grouped[i - rightObj._consumed];
+          this.debug(`handling => (function application) operation: ${r}(${left})`);
+          left = this._evalToken(`${r}(${left})`);
+          this.debug(`result of function application: ${left}`);
+          break;
+        }
+        default: {
+          let r = right()
+          this.debug(`attempting to evaluate unknown operator: ${op} with ${left} and ${r}`);
+          try {
+            left = eval(`${left} ${op} ${r}`);
+            this.debug(`eval successful, result: ${left}`);
+          } catch (e) {
+            this.debug(`error: Unknown operator: ${op}, error: ${e.message}`);
+            throw new Error(`Unknown operator: ${op}`);
+          }
+        }
+      }
+    }
+    this.debug(`final evaluated expression result: ${left}`);
+    return left;
+  }
+
+=== _readTokenOrFunc ===
+_readTokenOrFunc(tokens, i_start, isToc) {
+    this.debug(`_readTokenOrFunc: Starting at index ${i_start} with token '${tokens[i_start]}'. Full tokens: ${JSON.stringify(tokens)}`);
+
+    let current_parse_index = i_start;
+    let initial_tokens_consumed = 0;
+
+    let currentValue = tokens[i_start]; // This will hold the result of the current evaluation step
+    let contextObject = undefined; // This will hold the object 'this' should refer to for method calls
+
+    // Step 1: Evaluate the initial token or function call
+    if (current_parse_index < tokens.length && /^[\w.$]+$/.test(tokens[current_parse_index]) && tokens[current_parse_index + 1] === '(') {
+      // It's an initial function call, e.g., math.add(8,9)
+      this.debug(`_readTokenOrFunc: Detected initial function call: ${tokens[current_parse_index]}(...)`);
+      const funcName = tokens[current_parse_index];
+      let arg_start_index = current_parse_index + 2; // Position after funcName and '('
+      let parenDepth = 1;
+      let args = [];
+      let k = arg_start_index; // Use k for internal loop
+      while (k < tokens.length && parenDepth > 0) {
+        if (tokens[k] === '(') parenDepth++;
+        else if (tokens[k] === ')') parenDepth--;
+        if (parenDepth > 0) args.push(tokens[k]);
+        k++;
+      }
+      initial_tokens_consumed = k - current_parse_index;
+      const fullCallString = `${funcName}(${args.join(' ')})`;
+      this.debug(`_readTokenOrFunc: Evaluating initial function call string: '${fullCallString}'`);
+
+      // _evalToken is called here to resolve the function call itself (e.g., math.add(8,9) -> 17)
+      // This implicitly relies on _evalToken (or a helper it calls) to find and execute 'math.add'.
+      // For nova-style functions, funcName would be the variable holding the function object
+      // and then the chained call logic would take over.
+      currentValue = this._evalToken(fullCallString, true, isToc); // Pass true for isFullExpression, indicating a complex token
+      contextObject = currentValue;
+      this.debug(`_readTokenOrFunc: Result of initial call: ${currentValue}, Context: ${contextObject}`);
+
+      current_parse_index = k; // Update main iterator past the initial function call
+    } else if (current_parse_index < tokens.length) {
+      // It's a simple token (variable, literal) that might be chained, e.g., 'myVar'
+      this.debug(`_readTokenOrFunc: Evaluating initial simple token: '${tokens[current_parse_index]}'`);
+      currentValue = this._evalToken(tokens[current_parse_index], false, isToc); // Pass false for isFullExpression
+      contextObject = currentValue;
+      this.debug(`_readTokenOrFunc: Value: ${currentValue}, Context: ${contextObject}`);
+      current_parse_index++; // Update main iterator
+      initial_tokens_consumed = 1; // Only 1 token consumed initially
+    } else {
+      // No tokens to process, return empty result (should ideally not happen if called correctly)
+      this.debug(`_readTokenOrFunc: No tokens at start index ${i_start}.`);
+      return { value: undefined, _consumed: 0 };
+    }
+
+
+    // Step 2: Handle chaining (dot access, bracket access, method calls)
+    let total_consumed = initial_tokens_consumed; // Total tokens consumed by this function call
+    while (current_parse_index < tokens.length) {
+      this.debug(`_readTokenOrFunc: Chaining: current token: '${tokens[current_parse_index]}', currentValue: ${(currentValue)}, contextObject: ${(contextObject)}`);
+
+      if (tokens[current_parse_index] === '.' && (current_parse_index + 1) < tokens.length && /^[\w$]+$/.test(tokens[current_parse_index + 1])) {
+        // Chained property or method access (e.g., .toFixed, .remove)
+        const propertyName = tokens[current_parse_index + 1];
+        this.debug(`_readTokenOrFunc: Detected chained dot access: .${propertyName}`);
+
+        let retrievedMember = undefined;
+        const typeOfCurrentValue = this.typeof(currentValue); // e.g., 'number', 'string', 'object'
+
+        // 1. Try to find in varMethods (e.g., for 'string.remove')
+        // This is crucial for custom methods on primitive wrappers
+        if (this.varMethods?.[typeOfCurrentValue]?.[propertyName]) {
+          retrievedMember = this.varMethods[typeOfCurrentValue][propertyName];
+          this.debug(`_readTokenOrFunc: Found '${propertyName}' in varMethods.${typeOfCurrentValue}.`);
+        } else {
+          // 2. If not in varMethods, try direct property access (for built-in methods or regular object properties)
+          retrievedMember = currentValue[propertyName];
+          this.debug(`_readTokenOrFunc: Retrieved '${propertyName}' via direct access.`);
+        }
+
+        // Decide how to update currentValue and contextObject based on what was retrieved
+        if (typeof retrievedMember === 'function') {
+          currentValue = retrievedMember; // currentValue becomes the function object (e.g., toFixed, remove)
+          // contextObject *remains* the previous currentValue (e.g., 17, "17").
+          // This is the key for `apply`'s `this` binding on primitive methods.
+          this.debug(`_readTokenOrFunc: Retrieved method '${propertyName}'. currentValue is now the function, contextObject remains the base.`);
+        } else {
+          currentValue = retrievedMember; // currentValue becomes the property's value
+          contextObject = currentValue; // contextObject also becomes the new property's value (as it's a property, not a method)
+          this.debug(`_readTokenOrFunc: Retrieved property '${propertyName}'. currentValue and contextObject updated.`);
+        }
+        current_parse_index += 2; // Consume '.' and 'propertyName'
+        total_consumed += 2;
+      } else if (tokens[current_parse_index] === '[' && (current_parse_index + 1) < tokens.length) {
+        // Chained bracket access (e.g., [key])
+        this.debug(`_readTokenOrFunc: Detected chained bracket access: [...]`);
+        let bracket_content_start_index = current_parse_index + 1;
+        let k = bracket_content_start_index;
+        let bracketDepth = 1;
+        let bracketContentTokens = [];
+        while (k < tokens.length && bracketDepth > 0) {
+          if (tokens[k] === '[') bracketDepth++;
+          else if (tokens[k] === ']') bracketDepth--;
+          if (bracketDepth > 0) bracketContentTokens.push(tokens[k]);
+          k++;
+        }
+        if (bracketDepth !== 0) {
+          throw new Error("Mismatched brackets in expression."); // Ensure brackets are balanced
+        }
+        const evaluatedKey = this._evalToken(bracketContentTokens.join(' '), false, isToc); // Evaluate the key inside brackets
+        this.debug(`_readTokenOrFunc: Evaluated bracket key: ${evaluatedKey}`);
+
+        currentValue = currentValue[evaluatedKey];
+        contextObject = currentValue; // Update context for the next chain step
+        total_consumed += (k - current_parse_index); // Consume '[' + content + ']'
+        current_parse_index = k; // Update main iterator
+        this.debug(`_readTokenOrFunc: Result after bracket access: ${(currentValue)}, total_consumed: ${total_consumed}`);
+
+      } else if (tokens[current_parse_index] === '(') {
+        // Chained function call (e.g., toFixed(), remove(1))
+        this.debug(`_readTokenOrFunc: Detected chained function call: ()`);
+        let funcToCall = currentValue; // This should be the function object (e.g., Number.prototype.toFixed, string.remove)
+        let callContext = contextObject; // This should be the object to call it on (e.g., 17, "17")
+
+        let arg_paren_start_index = current_parse_index + 1;
+        let k = arg_paren_start_index;
+        let parenDepth = 1;
+        let argContentTokens = [];
+        while (k < tokens.length && parenDepth > 0) {
+          if (tokens[k] === '(') parenDepth++;
+          else if (tokens[k] === ')') parenDepth--;
+          if (parenDepth > 0) argContentTokens.push(tokens[k]);
+          k++;
+        }
+        if (parenDepth !== 0) {
+          throw new Error("Mismatched parentheses in function call."); // Ensure parentheses are balanced
+        }
+
+        // Evaluate arguments for the chained call using evaluateExpr
+        const argVals = this._splitArgs(argContentTokens.join(' ')).map(arg => this.evaluateExpr(arg));
+        this.debug(`_readTokenOrFunc: Evaluated arguments for chained call: ${(argVals)}`);
+
+        let resultOfCall;
+
+        // --- MODIFICATION START ---
+        // Check if funcToCall is a custom nova-style function object
+        if (typeof funcToCall === 'object' && funcToCall !== null && Array.isArray(funcToCall.args) && typeof funcToCall.body === 'string') {
+          this.debug(`_readTokenOrFunc: Executing nova-style function. Args: ${JSON.stringify(funcToCall.args)}, Body: '${funcToCall.body}'`);
+          // Save current scope
+          backupObject(this.variables);
+
+          // Map arguments to local variables
+          funcToCall.args.forEach((name, i) => {
+            if (i < argVals.length) {
+              this.variables[name] = argVals[i];
+            } else {
+              // Handle missing arguments if needed (e.g., undefined or default value)
+              this.variables[name] = undefined;
+            }
+          });
+
+          // Run the body of the function
+          resultOfCall = this.run(funcToCall.body); // Assuming `this.run` can execute the body string
+
+          // Restore previous scope
+          retrieveObject(this.variables);
+          this.debug(`_readTokenOrFunc: Result of nova-style function call: ${(resultOfCall)}`);
+
+        } else if (typeof funcToCall === 'function') {
+          // It's a regular JavaScript function or built-in method
+          this.debug(`_readTokenOrFunc: Directly calling chained JavaScript function. Func: ${funcToCall}, Context: ${(callContext)}, Args: ${(argVals)}`);
+          resultOfCall = funcToCall.apply(callContext, argVals); // Execute the method!
+        } else {
+          // Not a function and not a nova-style function object
+          this.debug(`_readTokenOrFunc: Error: Chained call target is not a function or a valid nova-style function object: ${(funcToCall)}`);
+          throw new Error(`Cannot call non-function or invalid nova-style function: ${(funcToCall)}`);
+        }
+        // --- MODIFICATION END ---
+
+        currentValue = resultOfCall;
+        contextObject = currentValue; // The result of this call becomes the context for further chaining
+
+        total_consumed += (k - current_parse_index); // Consume '(' + args + ')'
+        current_parse_index = k; // Update main iterator
+        this.debug(`_readTokenOrFunc: Result of chained call: ${currentValue}, total_consumed: ${total_consumed}`);
+      } else {
+        // No more chaining operators found (e.g., a standalone number after a chain like 'foo.bar 10')
+        this.debug(`_readTokenOrFunc: No more chaining operators found. Breaking.`);
+        break;
+      }
+    }
+
+    this.debug(`_readTokenOrFunc: Returning final value: ${currentValue}, total_consumed: ${total_consumed}`);
+    return { value: currentValue, _consumed: total_consumed };
+  }

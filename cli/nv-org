@@ -1,0 +1,47 @@
+#!/usr/bin/env node
+
+const fs = require('fs');
+const path = require('path');
+
+const file = process.argv[2];
+if (!file) {
+  console.error("Usage: nv-org <file.nova>");
+  process.exit(1);
+}
+
+let src = fs.readFileSync(file, 'utf-8').split('\n');
+
+// === Classification bins ===
+let declarations = [];
+let requires = [];
+let body = [];
+
+// === Patterns to catch ===
+const declKeywords = ['var', 'temp', 'map', 'enum', 'lend', 'keep', 'void'];
+const isDeclaration = line => declKeywords.some(k => line.trim().startsWith(k + ' '));
+const isRequire = line => /^require\s+/.test(line.trim());
+
+// === Classify lines ===
+for (let line of src) {
+  const trimmed = line.trim();
+  if (trimmed === '') continue;
+
+  if (isDeclaration(line)) declarations.push(line);
+  else if (isRequire(line)) requires.push(line);
+  else body.push(line);
+}
+
+// === Reassemble ===
+let output = [
+  '// [declarations]',
+  ...declarations,
+  '',
+  '// [logic]',
+  ...body,
+  '',
+  '// [requires]',
+  ...requires
+].join('\n');
+
+fs.writeFileSync(file, output, 'utf-8');
+console.log(`✅ Organized: ${file}`);

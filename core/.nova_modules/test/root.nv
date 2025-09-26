@@ -1,0 +1,15 @@
+/!/ entrypoint for Nova project
+/*
+A Test nova package.
+*/
+function test(a) { 
+  give a + 10;
+};
+
+function alloc(size) {
+  let ptr = pointer().alloc(size);
+  pointer().writeInt(ptr, 108);
+  give pointer().readByte(ptr);
+}
+print('ran');
+give () => 10;

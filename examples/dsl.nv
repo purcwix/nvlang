@@ -1,0 +1,48 @@
+/!/ Line-based Token Runner
+
+/!/ storage
+let storage = {};
+let cmds = {
+pri=(args) => { print(args); };
+};
+
+/!/ Execute a single line of code
+func executeLine(line) => {
+    let tokens = regex.match("<strliteral|var|keyword|digit|symbol>", line);  // Split line into tokens
+    let cmd = tokens[0].trim();
+    let args = tokens.slice(1);
+    let result = '';
+
+    if (cmd === "print") {
+        print(args.join(" "));  // Join back for multi-word print
+    } else if (cmd === "bin") {
+       result = pointer().execMachineCode(args.map((a) => a as value));  // Join back for multi-word print
+    } else if (cmd === "sig") {
+        signals() .raise(args[0] as value);
+    } else if (cmd === "sub") {
+        print(args[0] - args[1]);
+    } else if (cmd === "add") {
+        print(args[0] as value + args[1] as value);
+    } else if (cmd === "set") {
+        let name = args[0];
+        storage.set(name,args[2] as value);
+        result = args[2] as value;
+    } else if (cmd in storage) {
+        result = storage[cmd](args);
+    } else if (cmd === 'exit') {
+        exit(0);
+    } else if (cmd in cmds) {
+	result = cmds[cmd](args);
+    } else {
+        print("Unknown command: " + cmd);
+    }
+    give result;
+};
+// loop runner
+repeat (10) {
+input(i + '> ') => code;
+try {
+print(executeLine(code));
+} catch(e) {}
+}
+

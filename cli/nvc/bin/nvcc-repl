@@ -1,0 +1,49 @@
+#!/usr/bin/env node
+
+const fs = require("fs");
+const readline = require("readline");
+const { execSync } = require("child_process");
+
+const { preprocess } = require("../nvcc-pre");
+const { tokenize } = require("../tokenizer");
+const { parse } = require("../parser");
+const { compile } = require("../compiler");
+
+const tmpFile = "repl_tmp";
+const tmpNVCC = `${tmpFile}.nvcc`;
+const tmpASM = `${tmpFile}.asm`;
+const tmpOBJ = `${tmpFile}.o`;
+const tmpOUT = `./${tmpFile}`;
+
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: "nvcc-repl> "
+});
+
+console.log("🧠 Welcome to the NVCC REPL!\nType Nova lines. Ctrl+C to exit.\n");
+rl.prompt();
+
+rl.on("line", (line) => {
+    try {
+        // Wrap it in fake `.nvcc` format
+        const code = line.trim();
+        if (!code) return rl.prompt();
+
+        const preprocessed = preprocess(code);
+        const tokens = tokenize(preprocessed);
+        const ast = parse(tokens);
+        const asm = compile(ast);
+
+        fs.writeFileSync(tmpNVCC, preprocessed);
+        fs.writeFileSync(tmpASM, asm);
+        execSync(`as ${tmpASM} -o ${tmpOBJ}`);
+        execSync(`ld ${tmpOBJ} -o ${tmpOUT}`);
+        execSync(tmpOUT, { stdio: "inherit" });
+
+    } catch (err) {
+        console.error("❌ Error:", err.message);
+    }
+
+    rl.prompt();
+});

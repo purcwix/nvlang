@@ -1,0 +1,17 @@
+#!/usr/bin/env node
+const readline = require('readline');
+
+const fs = require('fs');
+const path = require('path');
+const { compile_to_nova__yip } = require('./ny-compiler.js');
+
+const file = process.argv[2];
+if (!file) {
+ console.error('Usage: ny filename output');
+} else {
+// Corrected line: Add 'utf8' encoding to read the file as a string
+const code = fs.readFileSync(path.resolve(file), 'utf8');
+
+const filename = process.argv[3];
+fs.writeFileSync(filename, compile_to_nova__yip(code));
+}

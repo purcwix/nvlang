@@ -1,0 +1,106 @@
+#!/usr/bin/env node
+import { Command } from "commander";
+import fs from "fs";
+import path from "path";
+import readline from "readline";
+import { execSync } from "child_process";
+import os from "os";
+
+const REGISTRY = "https://github.com/purcwix/nova_modules_pkgs.git";
+
+const program = new Command();
+
+program
+  .name("nv+")
+  .description("Nova version plus manager")
+  .version("0.1.0");
+
+// Helper: ask question in CLI
+function ask(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise((resolve) =>
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer);
+    })
+  );
+}
+
+// Default config
+const defaults = {
+  name: "project",
+  version: "0.1.0",
+  description: "",
+  author: "",
+  license: "MIT",
+};
+
+// ---------- INIT ----------
+program
+  .command("init [name]")
+  .option("-y, --yes", "Use default values without prompt")
+  .description("Initialize a new Nova project")
+  .action(async (name, options) => {
+    const projectName = name || defaults.name;
+    const root = path.resolve(process.cwd(), projectName);
+
+    if (fs.existsSync(root)) {
+      console.error(`❌ Directory ${projectName} already exists.`);
+      process.exit(1);
+    }
+
+    let answers = { ...defaults, name: projectName };
+
+    if (!options.yes) {
+      answers.version = (await ask(`version (${defaults.version}): `)) || defaults.version;
+      answers.description = (await ask("description: ")) || "";
+      answers.author = (await ask("author: ")) || "";
+      answers.license = (await ask(`license (${defaults.license}): `)) || defaults.license;
+    }
+
+    // Create dirs
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, ".nvroot"), "");
+    fs.mkdirSync(path.join(root, ".nova_modules"), { recursive: true });
+    fs.mkdirSync(path.join(root, "plugins"), { recursive: true });
+    fs.mkdirSync(path.join(root, "commands"), { recursive: true });
+    fs.mkdirSync(path.join(root, "extras"), { recursive: true });
+    fs.writeFileSync("priorities.json", '');
+
+    // root.nv file
+    fs.writeFileSync(
+      path.join(root, "root.nv"),
+      "/!/ entrypoint for Nova project\nprint('Hello from Nova root!')\n"
+    );
+
+    // versions.json
+    fs.writeFileSync(
+      path.join(root, "versions.json"),
+      JSON.stringify({ nova: "latest" }, null, 2)
+    );
+
+    // dependency.json (like package.json)
+    fs.writeFileSync(
+      path.join(root, "dependency.json"),
+      JSON.stringify(
+        {
+          name: answers.name,
+          version: answers.version,
+          description: answers.description,
+          author: answers.author,
+          license: answers.license,
+          dependencies: {},
+        },
+        null,
+        2
+      )
+    );
+
+    console.log(`✨ Nova project initialized at ${root}`);
+  });
+
+program.parse(process.argv);
+

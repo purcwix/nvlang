@@ -1,0 +1,3 @@
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/pi/build/CMakeFiles/pi.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/pi/build/CMakeFiles/edit_cache.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/pi/build/CMakeFiles/rebuild_cache.dir

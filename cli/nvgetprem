@@ -1,0 +1,491 @@
+#!/usr/bin/env node
+
+const blessed = require('blessed');
+const figlet = require('figlet');
+const fs = require('fs');
+const crypto = require('crypto');
+const { exec } = require('child_process');
+
+const screen = blessed.screen({ smartCSR: true, title: 'nvgetprem Wizard' });
+const answers = {};
+
+let comboSteps = ['C-d', 'C-t', 'C-a', 'C-b'];
+let currentComboIndex = 0;
+let devCodeState = 0;
+let sandboxActive = false;
+
+// == PERMISSION TREE ==
+const permissionTree = {
+  license: {
+    _auto: {
+      status: 'denied',
+      reason: 'modifying license is forbidden',
+      priority: 3
+    }
+  },
+  cli: {
+    see: {
+      _auto: {
+        status: 'allowed',
+        reason: 'CLI inspection allowed',
+        priority: 0
+      }
+    },
+    modify: {
+      personal: {
+        keep: {
+          status: 'allowed',
+          reason: 'CLI local modification allowed',
+          priority: 1
+        },
+        share: {
+          status: 'restricted',
+          reason: 'sharing CLI modifications requires permission',
+          priority: 2,
+          contact: 'dr.mrboubou@gmail.com'
+        }
+      },
+      testing: {
+        keep: {
+          status: 'allowed',
+          reason: 'CLI testing allowed locally',
+          priority: 1
+        },
+        share: {
+          status: 'restricted',
+          reason: 'testing modifications require approval before sharing',
+          priority: 2,
+          contact: 'dr.mrboubou@gmail.com'
+        }
+      },
+      education: {
+        keep: {
+          status: 'denied',
+          reason: 'educational use of CLI modifications denied',
+          priority: 3
+        },
+        share: {
+          status: 'denied',
+          reason: 'educational redistribution not allowed',
+          priority: 3
+        }
+      }
+    }
+  },
+  // ...src, plugin, build, interpreter, docs (same as your previous code)
+  src: {
+    see: {
+      _auto: {
+        status: 'allowed',
+        reason: 'source viewing allowed',
+        priority: 0
+      }
+    },
+    "get info": {
+      _auto: {
+        status: 'allowed',
+        reason: 'source information access allowed',
+        priority: 0
+      }
+    },
+    "use node module": {
+      _auto: {
+        status: 'allowed',
+        reason: 'using as module allowed',
+        priority: 0
+      }
+    },
+    modify: {
+      personal: {
+        keep: {
+          status: 'allowed',
+          reason: 'personal local mod of source allowed',
+          priority: 1
+        },
+        share: {
+          status: 'restricted',
+          reason: 'sharing modified source requires permission',
+          priority: 2,
+          contact: 'dr.mrboubou@gmail.com'
+        }
+      },
+      testing: {
+        keep: {
+          status: 'allowed',
+          reason: 'testing mods locally allowed',
+          priority: 1
+        },
+        share: {
+          status: 'restricted',
+          reason: 'testing source share needs permission',
+          priority: 2,
+          contact: 'dr.mrboubou@gmail.com'
+        }
+      },
+      education: {
+        keep: {
+          status: 'denied',
+          reason: 'educational use of modified source denied',
+          priority: 3
+        },
+        share: {
+          status: 'denied',
+          reason: 'cannot redistribute modified source for education',
+          priority: 3
+        }
+      }
+    }
+  },
+  plugin: {
+    see: {
+      _auto: {
+        status: 'allowed',
+        reason: 'plugin inspection allowed',
+        priority: 0
+      }
+    },
+    modify: {
+      personal: {
+        keep: {
+          status: 'allowed',
+          reason: 'local plugin mods allowed',
+          priority: 1
+        },
+        share: {
+          status: 'restricted',
+          reason: 'plugin share requires approval',
+          priority: 2,
+          contact: 'dr.mrboubou@gmail.com'
+        }
+      },
+      testing: {
+        keep: {
+          status: 'allowed',
+          reason: 'plugin testing mods allowed',
+          priority: 1
+        },
+        share: {
+          status: 'restricted',
+          reason: 'testing plugin share requires approval',
+          priority: 2,
+          contact: 'dr.mrboubou@gmail.com'
+        }
+      },
+      education: {
+        keep: {
+          status: 'denied',
+          reason: 'educational plugin modification denied',
+          priority: 3
+        },
+        share: {
+          status: 'denied',
+          reason: 'no educational redistribution for plugins',
+          priority: 3
+        }
+      }
+    }
+  },
+  build: {
+    modify: {
+      personal: {
+        keep: {
+          status: 'allowed',
+          reason: 'personal build scripts mod okay',
+          priority: 1
+        },
+        share: {
+          status: 'restricted',
+          reason: 'build modifications need permission to share',
+          priority: 2,
+          contact: 'dr.mrboubou@gmail.com'
+        }
+      },
+      education: {
+        keep: {
+          status: 'denied',
+          reason: 'educational sharing of builds denied',
+          priority: 3
+        },
+        share: {
+          status: 'denied',
+          reason: 'builds can’t be redistributed for teaching',
+          priority: 3
+        }
+      }
+    }
+  },
+  interpreter: {
+    see: {
+      _auto: {
+        status: 'allowed',
+        reason: 'interpreter view allowed',
+        priority: 0
+      }
+    },
+    modify: {
+      personal: {
+        keep: {
+          status: 'allowed',
+          reason: 'interpreter local mods allowed',
+          priority: 1
+        },
+        share: {
+          status: 'restricted',
+          reason: 'interpreter sharing needs permission',
+          priority: 2,
+          contact: 'dr.mrboubou@gmail.com'
+        }
+      },
+      education: {
+        keep: {
+          status: 'denied',
+          reason: 'educational interpreter mods denied',
+          priority: 3
+        },
+        share: {
+          status: 'denied',
+          reason: 'can’t redistribute interpreter mods',
+          priority: 3
+        }
+      }
+    }
+  },
+  docs: {
+    see: {
+      _auto: {
+        status: 'allowed',
+        reason: 'documentation is public',
+        priority: 0
+      }
+    }
+  }
+};
+
+// == UI Setup ==
+figlet('nvgetprem', { font: 'Standard' }, (err, data) => {
+  if (err) return;
+  const banner = blessed.box({
+    top: 0, left: 'center', width: '100%', height: 7,
+    tags: true, content: data, align: 'center',
+    style: { fg: 'cyan' }
+  });
+  screen.append(banner);
+  runStep1();
+});
+
+// == Step Functions ==
+function runStep1() {
+  createSelector('1) Mess With?', 8, Object.keys(permissionTree), (res) => {
+    answers.mess = res;
+    runStep2();
+  });
+}
+function runStep2() {
+  const actionKeys = permissionTree[answers.mess];
+  if (actionKeys._auto) return showResults();
+  createSelector('2) What do you plan to do?', 8, Object.keys(actionKeys), (res) => {
+    answers.doToSrc = res;
+    runStep3();
+  });
+}
+function runStep3() {
+  const reasonKeys = permissionTree[answers.mess]?.[answers.doToSrc];
+  if (reasonKeys._auto) return showResults();
+  createSelector('3) Why?', 8, Object.keys(reasonKeys), (res) => {
+    answers.modifyWhy = res;
+    runStep4();
+  });
+}
+function runStep4() {
+  const afterModKeys = permissionTree[answers.mess]?.[answers.doToSrc]?.[answers.modifyWhy];
+  createSelector('4) After Mod?', 8, Object.keys(afterModKeys), (res) => {
+    answers.afterMod = res;
+    showResults();
+  });
+}
+
+function showResults() {
+  const result = evaluateAnswers(answers);
+  const token = ['allowed', 'restricted'].includes(result.status)
+    ? generateToken(answers.mess, result.priority)
+    : null;
+
+  const licenseData = {
+    license_version: "nv-prem v0.3 (StepWizard)",
+    declared_intent: answers,
+    result: result.status,
+    reason: result.reason,
+    contact: result.contact || null,
+    license_id: "NV-" + Math.random().toString(36).substring(2, 10).toUpperCase(),
+    token,
+    issued_at: new Date().toISOString()
+  };
+
+  fs.writeFileSync("nvlang_license.json", JSON.stringify(licenseData, null, 2));
+
+  const output = blessed.box({
+    top: 8, left: 'center', width: '80%', height: 10,
+    border: 'line', label: 'Result',
+    style: { border: { fg: 'magenta' }, fg: 'white' },
+    content:
+      `Status: ${result.status.toUpperCase()}\n` +
+      `Reason: ${result.reason}\n` +
+      (token ? `Token: ${token}\n` : '') +
+      `Saved to: nvlang_license.json\nPress Q to exit`
+  });
+
+  screen.append(output);
+  screen.render();
+  screen.key(['q', 'C-c', 'escape'], () => process.exit(0));
+}
+
+function evaluateAnswers({ mess, doToSrc, modifyWhy, afterMod }) {
+  if (sandboxActive) {
+    return { status: 'allowed', reason: 'sandbox override', priority: 0 };
+  }
+  const topic = permissionTree[mess];
+  if (!topic) return { status: 'denied', reason: 'Invalid topic', priority: 3 };
+  if (topic._auto) return topic._auto;
+  const action = topic[doToSrc];
+  if (!action) return { status: 'denied', reason: 'Invalid action', priority: 3 };
+  if (action._auto) return action._auto;
+  const reason = action[modifyWhy];
+  if (!reason) return { status: 'denied', reason: 'Invalid reason', priority: 3 };
+  const result = reason[afterMod];
+  if (!result) return { status: 'denied', reason: 'Invalid modification result', priority: 3 };
+  return result;
+}
+
+function generateToken(scope, level) {
+  const rand = crypto.randomBytes(4).toString('hex').slice(0, 8);
+  return `nv-prem:${scope}:level${level}:${rand}`;
+}
+
+// == UI Helper ==
+function createSelector(label, top, options, onDone) {
+  const box = blessed.box({
+    parent: screen, top, left: 'center', width: '70%',
+    height: options.length + 4, border: 'line', label,
+    style: { border: { fg: 'cyan' } }
+  });
+  const list = blessed.list({
+    parent: box, top: 1, left: 2,
+    width: '95%', height: options.length + 2,
+    keys: true, mouse: true, items: options,
+    style: {
+      selected: { bg: 'green', fg: 'black' },
+      item: { fg: 'white' }
+    }
+  });
+  list.focus();
+  list.on('select', (item, idx) => {
+    screen.remove(box);
+    screen.render();
+    onDone(options[idx]);
+  });
+  screen.append(box);
+  screen.render();
+}
+
+// == DEV COMBO TRACKER ==
+screen.key(comboSteps, (ch, key) => {
+  if (key.full === comboSteps[currentComboIndex]) {
+    currentComboIndex++;
+    if (currentComboIndex === comboSteps.length) {
+      currentComboIndex = 0;
+      showDevCodePrompt();
+    }
+  } else {
+    currentComboIndex = 0;
+  }
+});
+screen.key(['C-1'], () => {
+  if (devCodeState === 1) devCodeState = 2;
+});
+screen.key(['C-t'], () => {
+  if (devCodeState === 2) {
+    devCodeState = 0;
+    activateSandboxTerminal();
+  }
+});
+
+function showDevCodePrompt() {
+  const inputBox = blessed.prompt({
+    top: 'center',
+    left: 'center',
+    width: '50%',
+    height: 8,
+    label: '🔐 Enter Secret Code',
+    border: 'line',
+    keys: true,
+    mouse: true,
+    style: { border: { fg: 'yellow' }, fg: 'white' }
+  });
+
+  screen.append(inputBox);
+  inputBox.readInput('Enter Developer Code:', '', (err, value) => {
+    if (value === '123456789') {
+      screen.destroy();
+      console.log('👢 GET OUT: Access Terminated.');
+      process.exit(1);
+    } else if (value === '1027917FRD') {
+      devCodeState = 1;
+      showHint("✔️ Stage 2 Unlocked. Press Ctrl+1 then Ctrl+T...");
+    } else {
+      showHint("❌ Invalid Code. Try again.");
+      devComboState = 0;
+    }
+  });
+  screen.render();
+}
+
+function showHint(msg) {
+  const hint = blessed.box({
+    top: 'center',
+    left: 'center',
+    width: '50%',
+    height: 5,
+    content: msg,
+    border: 'line',
+    style: { border: { fg: 'green' }, fg: 'white' }
+  });
+  screen.append(hint);
+  screen.render();
+  setTimeout(() => {
+    screen.remove(hint);
+    screen.render();
+  }, 2500);
+}
+
+const { spawn } = require('child_process');
+
+function activateSandboxTerminal() {
+  if (sandboxActive) return;
+  sandboxActive = true;
+
+  // 🔥 Kill the blessed screen FIRST
+  screen.destroy();
+
+  const session = `nvgetprem_sandbox_${Date.now()}`;
+  const timerMs = 10 * 60 * 1000;
+
+  console.log(`\n🔐 Sandbox session started: ${session}`);
+  console.log(`🕒 You have 10 minutes. Type 'exit' to leave early.\n`);
+
+  // 👾 Start tmux interactively
+  const child = spawn('tmux', ['new-session', '-s', session], {
+    stdio: 'inherit'
+  });
+
+  // ⏱ Kill session after 10 minutes
+  setTimeout(() => {
+    const killer = spawn('tmux', ['kill-session', '-t', session]);
+    console.log(`\n⛔ Sandbox session '${session}' auto-terminated.`);
+  }, timerMs);
+
+  // 🚪 Handle manual exit
+  child.on('exit', () => {
+    console.log(`\n👋 Sandbox session '${session}' ended.`);
+    process.exit(0);
+  });
+}

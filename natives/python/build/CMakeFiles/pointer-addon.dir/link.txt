@@ -1,0 +1,1 @@
+/data/data/com.termux/files/usr/bin/c++ -fPIC -DBUILDING_NODE_EXTENSION -O3 -DNDEBUG -Xlinker --dependency-file=CMakeFiles/pointer-addon.dir/link.d -shared -Wl,-soname,pointer-addon.node -o Release/pointer-addon.node "CMakeFiles/pointer-addon.dir/src/addon.cpp.o"  /data/data/com.termux/files/usr/lib/libpython3.12.so

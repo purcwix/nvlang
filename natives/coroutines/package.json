@@ -1,0 +1,18 @@
+{
+  "name": "nova-utils-addon",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "install": "cmake-js compile"
+  },
+  "dependencies": {
+    "bindings": "^1.5.0",
+    "cmake-js": "^7.3.0",
+    "node-addon-api": "^8.5.0"
+  },
+  "devDependencies": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}

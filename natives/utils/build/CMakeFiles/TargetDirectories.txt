@@ -1,0 +1,3 @@
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/utils/build/CMakeFiles/pointer-addon.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/utils/build/CMakeFiles/edit_cache.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/utils/build/CMakeFiles/rebuild_cache.dir

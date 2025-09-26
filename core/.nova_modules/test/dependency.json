@@ -1,0 +1,10 @@
+{
+  "name": "test",
+  "version": "1.0.0",
+  "description": "test",
+  "author": "purcwix",
+  "license": "MIT",
+  "dependencies": {
+    "example-repo": "latest"
+   }
+}

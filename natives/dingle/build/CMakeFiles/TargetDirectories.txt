@@ -1,0 +1,3 @@
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/dingle/build/CMakeFiles/dingles.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/dingle/build/CMakeFiles/edit_cache.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/dingle/build/CMakeFiles/rebuild_cache.dir

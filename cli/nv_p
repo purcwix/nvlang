@@ -1,0 +1,114 @@
+#!/usr/bin/env node
+
+const fs = require("fs");
+const path = require("path");
+
+const args = process.argv.slice(2);
+const inputPath = args[1];
+const DELETE_SOURCE = args.includes("-d");
+
+if (!inputPath) {
+  console.error("Usage: nv_plugin compile plugin.nv_plugin [-d]");
+  process.exit(1);
+}
+
+console.log("..reading command list");
+
+const src = fs.readFileSync(inputPath, "utf8");
+const lines = src.split("\n");
+
+let commands = {};
+let compiles = {};
+let donts = new Set();
+let exportsMap = {};
+
+let currentCmd = null;
+let currentBody = [];
+
+for (let line of lines) {
+  line = line.trim();
+
+  if (line.startsWith("command ")) {
+    currentCmd = line.match(/command (\w+):/)?.[1];
+    currentBody = [];
+  } else if (line.startsWith("END command ")) {
+    if (currentCmd) {
+      commands[currentCmd] = currentBody.slice();
+      currentCmd = null;
+    }
+  } else if (line.startsWith("COMPILE")) {
+    const [, key, targets] = line.match(/COMPILE (\w+) => (.+)/);
+    compiles[key] = targets.split("&").map(t => t.trim());
+  } else if (line.startsWith("DONT")) {
+    const inner = line.match(/DONT\s*\{\s*COMPILE\s+(\w+)\s*\}/)?.[1];
+    if (inner) donts.add(inner);
+  } else if (line.startsWith("EXPORT")) {
+    const [left, right] = line.replace("EXPORT", "").split(":").map(s => s.trim());
+    exportsMap[left] = right;
+  } else if (currentCmd) {
+    currentBody.push(line);
+  }
+}
+
+function transformLine(line) {
+  line = line.replace(/\|$/, "").trim();
+
+  if (line.startsWith("VAR ")) {
+    const [, name, action] = line.match(/VAR (\w+) = (.+)/);
+    if (action === "until_sem") return `let ${name} = parseUntilSem();`;
+    if (action === "block") return `let ${name} = parseBlock();`;
+    if (action === "next") return `let ${name} = next();`;
+    if (action === "peek") return `let ${name} = peek();`;
+    if (action === "parentheses") return `let ${name} = parseParen();`;
+    return `let ${name} = ${action};`;
+
+  } else if (line.startsWith("EXPECT ")) {
+    const [, tok] = line.match(/EXPECT (.+)/);
+    return `expect(${JSON.stringify(tok)});`;
+
+  } else if (line.startsWith("call ")) {
+    const callParts = line.match(/^call (.+?):\s*(.*)/);
+    if (!callParts) return "// Invalid call syntax";
+
+    const rawCall = callParts[1]; // e.g., "native of fn of functions of this"
+    const args = callParts[2];    // e.g., "hi"
+
+    const parts = rawCall.split(" of ").map(p => p.trim());
+    const func = parts.shift();                     // "native"
+    const contextChain = parts.reverse().join("."); // "this.functions.fn"
+
+    const callExpr = contextChain
+      ? `${contextChain}.${func}`
+      : func;
+
+    return `${callExpr}(${args.trim()});`;
+  }
+
+  return "// Unrecognized: " + line;
+}
+
+function writePlugin(filename, code) {
+  const outPath = path.join(process.cwd(), filename);
+  fs.writeFileSync(outPath, code + "\n");
+  console.log("..created", filename);
+}
+
+console.log("..compiling JS");
+
+for (let cmd in compiles) {
+  if (donts.has(cmd)) continue;
+
+  const codeLines = commands[cmd]?.map(transformLine) || [];
+  const jsCode = codeLines.join("\n");
+
+  for (let file of compiles[cmd]) {
+    writePlugin(file, jsCode);
+  }
+}
+
+if (DELETE_SOURCE) {
+  fs.unlinkSync(inputPath);
+  console.log("..deleting source file:", inputPath);
+}
+
+console.log("..done!");

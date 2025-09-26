@@ -1,0 +1,6 @@
+module.list().forEach((a) => {
+    let name = '\color{6}' + a + '\color{0}';    // 6 = cyan-ish, 0 = default
+    let info = '\color{3}' + module.info(a) + '\color{0}'; // 3 = yellow-ish
+    print(name + ': ' + info;);
+});
+

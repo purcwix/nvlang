@@ -1,0 +1,3 @@
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/ncurses/build/CMakeFiles/ncurses.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/ncurses/build/CMakeFiles/edit_cache.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/ncurses/build/CMakeFiles/rebuild_cache.dir

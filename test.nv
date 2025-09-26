@@ -1,0 +1,13 @@
+type cat {
+    function=(a)=>{
+        if (Type a === 'number') {
+            throw 'cannot convert number into a cat name.';
+        } else {
+            give a as 'string';
+        };
+    };
+};
+
+cat Why;
+
+log(typeof Why);

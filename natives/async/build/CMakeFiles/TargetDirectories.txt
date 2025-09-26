@@ -1,0 +1,3 @@
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/async/build/CMakeFiles/async.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/async/build/CMakeFiles/edit_cache.dir
+/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/async/build/CMakeFiles/rebuild_cache.dir

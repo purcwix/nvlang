@@ -1,0 +1,100 @@
+#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+
+const filepath = process.argv[2];
+const showKeywords = process.argv[3] === '-k';
+
+if (!filepath || !fs.existsSync(filepath)) {
+  console.error('Usage: nvstats <filename> [-k]');
+  process.exit(1);
+}
+
+const code = fs.readFileSync(path.resolve(filepath), 'utf8');
+let lines = code.split(/\r?\n/);
+let totalLines = lines.length;
+
+let functionCount = 0;
+let tokenCalls = 0;
+let evalCalls = 0;
+let commentLines = 0;
+let recursionDetected = false;
+let globalVars = new Set();
+let strictEqualityChecks = 0;
+let keywordsSet = new Set(); // This will now store both strict equality keywords and string method arguments
+let stringMethodCalls = 0;
+
+const tokenRegex = /\btokenize\s*\(/;
+const evalRegex = /\beval\s*\(/;
+const functionRegex = /function\s+[a-zA-Z0-9_]+\s*\(|(?:\w+\s*=\s*)?\([^)]*\)\s*=>/;
+const commentRegex = /^\s*\/\//;
+const varRegex = /^\s*(let|const|var)\s+([a-zA-Z0-9_]+)/;
+const callStackKeywords = /function\s+[a-zA-Z0-9_]+\s*\([^)]*\)\s*{[\s\S]*?\b\1\s*\(/g;
+const strictEqualityRegex = /\s*\===\s*(['"`])([^'"`]+?)\1/g;
+
+// Regex to capture arguments of common string methods
+const stringMethodArgRegex = /\.(?:startsWith|endsWith|includes|indexOf|lastIndexOf|slice|substring|substr|replace|replaceAll|trim|trimStart|trimEnd|toUpperCase|toLowerCase|concat|split|charAt|charCodeAt)\s*\(\s*(['"`])(.*?)\1(?:,\s*.*?)?\)/g;
+
+
+for (const line of lines) {
+  const trimmed = line.trim();
+
+  if (commentRegex.test(trimmed)) commentLines++;
+  if (functionRegex.test(trimmed)) functionCount++;
+  if (tokenRegex.test(trimmed)) tokenCalls++;
+  if (evalRegex.test(trimmed)) evalCalls++;
+
+  const varMatch = trimmed.match(varRegex);
+  if (varMatch) globalVars.add(varMatch[2]);
+
+  const strictMatches = [...trimmed.matchAll(strictEqualityRegex)];
+  for (const match of strictMatches) {
+    strictEqualityChecks++;
+    keywordsSet.add(match[2]);
+  }
+
+  const stringMethodArgMatches = [...line.matchAll(stringMethodArgRegex)];
+  for (const match of stringMethodArgMatches) {
+    stringMethodCalls++;
+    // Add the captured argument (group 2) to the keywordsSet
+    keywordsSet.add(match[2]);
+  }
+}
+
+if (callStackKeywords.test(code)) recursionDetected = true;
+
+function percentage(part, total) {
+  return total === 0 ? '0%' : ((part / total) * 100).toFixed(1) + '%';
+}
+
+if (showKeywords) {
+  const keywordArray = Array.from(keywordsSet).map(k => `'${k}'`);
+  console.log(`this.keywordsArray = [${keywordArray.join(', ')}];`);
+  process.exit(0);
+}
+
+console.log(`
+🧠 Nova Stats for ${path.basename(filepath)}:
+────────────────────────────────────────────
+Total lines         : ${totalLines}
+Functions           : ${functionCount}
+Token calls         : ${tokenCalls}
+Direct evals        : ${evalCalls}
+Global variables    : ${globalVars.size}
+Comment lines       : ${commentLines} (${percentage(commentLines, totalLines)})
+Recursion?          : ${recursionDetected ? '🌀 Yes' : '❌ Nope'})
+Strict '===' checks : ${strictEqualityChecks}
+String method calls : ${stringMethodCalls}
+────────────────────────────────────────────
+`);
+
+let longest = [...lines]
+  .map((line, i) => ({ i: i + 1, len: line.length, line }))
+  .sort((a, b) => b.len - a.len)
+  .slice(0, 5);
+
+console.log('📏 Longest Lines:');
+longest.forEach(l => {
+  console.log(`  Line ${l.i}: ${l.len} chars`);
+});
+console.log('');

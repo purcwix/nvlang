@@ -1,0 +1,87 @@
+#!/usr/bin/env node
+
+const fs = require('fs');
+const path = require('path');
+
+// Helper: Extract match
+function matchLine(regex, line) {
+  const match = line.match(regex);
+  return match ? match[1] : null;
+}
+
+// Main logic
+function findDefinitions(content) {
+  const defs = [];
+  const lines = content.split('\n');
+
+  for (let line of lines) {
+    line = line.trim();
+
+    // VAR
+    let name = matchLine(/^var\s+([a-zA-Z_]\w*)\s*=/, line);
+    if (name) {
+      defs.push({ type: 'var', name });
+      continue;
+    }
+
+    // FUNCTION
+    name = matchLine(/^function\s+([a-zA-Z_]\w*)\s*\(/, line);
+    if (name) {
+      defs.push({ type: 'function', name });
+      continue;
+    }
+
+    // MAP
+    name = matchLine(/^map\s+([a-zA-Z_]\w*)\s*{/, line);
+    if (name) {
+      defs.push({ type: 'map', name });
+      continue;
+    }
+
+    // ENUM
+    name = matchLine(/^enum\s+([a-zA-Z_]\w*)\s*=\s*\[/, line);
+    if (name) {
+      defs.push({ type: 'enum', name });
+      continue;
+    }
+
+    // ARRAY (bare assignment to [ ... ])
+    name = matchLine(/^([a-zA-Z_]\w*)\s*=\s*\[/, line);
+    if (name) {
+      defs.push({ type: 'array', name });
+      continue;
+    }
+  }
+
+  return defs;
+}
+
+// CLI Entry
+function runCLI() {
+  const args = process.argv.slice(2);
+
+  if (args.length < 2 || args[0] !== 'def') {
+    console.error('Usage: nvfind def <file.nova>');
+    process.exit(1);
+  }
+
+  const filePath = args[1];
+
+  if (!fs.existsSync(filePath)) {
+    console.error(`❌ File not found: ${filePath}`);
+    process.exit(1);
+  }
+
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const defs = findDefinitions(content);
+
+  if (defs.length === 0) {
+    console.log('No definitions found.');
+  } else {
+    for (const def of defs) {
+      console.log(`📦 ${def.type.padEnd(8)} → ${def.name}`);
+    }
+  }
+}
+
+runCLI();

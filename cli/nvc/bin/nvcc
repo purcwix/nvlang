@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+
+const fs = require("fs");
+const path = require("path");
+const { execSync } = require("child_process");
+
+const { preprocess } = require("../nvcc-pre");
+const { tokenize } = require("../tokenizer");
+const { parse } = require("../parser");
+const { compile } = require("../compiler");
+
+const args = process.argv.slice(2);
+if (args.length === 0) {
+    console.error("Usage: NVCC [options] <file.nvcc>");
+    process.exit(1);
+}
+
+const options = {
+    deleteSource: false,
+    keepAsm: false
+};
+
+let filepath = null;
+
+for (const arg of args) {
+    if (arg === "-d") options.deleteSource = true;
+    else if (arg === "-a") options.keepAsm = true;
+    else if (arg.endsWith(".nvcc")) filepath = arg;
+}
+
+if (!filepath) {
+    console.error("⚠️ No .nvcc file provided.");
+    process.exit(1);
+}
+
+const filename = path.basename(filepath, ".nvcc");
+const asmPath = `${filename}.asm`;
+const objPath = `${filename}.o`;
+const outPath = `./${filename}`;
+
+// Step 1: Read and preprocess
+let code = fs.readFileSync(filepath, "utf8");
+code = preprocess(code);
+
+// Step 2: Tokenize + Parse + Compile
+const tokens = tokenize(code);
+const ast = parse(tokens);
+const asm = compile(ast);
+
+// Step 3: Write .asm file
+fs.writeFileSync(asmPath, asm);
+
+// Step 4: Assemble with NASM
+console.log(`🔧 Assembling ${asmPath} → ${objPath}`);
+try {
+// In bin/nvcc.js (or bin/NVCC script)
+execSync(`as ${asmPath} -o ${objPath}`, { stdio: "inherit" });
+} catch (e) {
+    console.error("❌ NASM assembly failed.");
+    process.exit(1);
+}
+
+// Step 5: Link with ld
+console.log(`🔗 Linking ${objPath} → ${outPath}`);
+try {
+execSync(`ld ${objPath} -o ${outPath}`, { stdio: "inherit" });
+} catch (e) {
+    console.error("❌ Linking failed.");
+    process.exit(1);
+}
+
+// Step 6: Cleanup
+fs.unlinkSync(objPath);
+
+if (!options.keepAsm) {
+    fs.unlinkSync(asmPath);
+}
+
+if (options.deleteSource) {
+    fs.unlinkSync(filepath);
+}
+
+console.log(`✅ Built executable: ${outPath}`);

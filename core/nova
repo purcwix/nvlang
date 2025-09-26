@@ -1,0 +1,384 @@
+#!/usr/bin/env node
+const { Command } = require('commander');
+const readline = require('readline');
+const fs = require('fs');
+const path = require('path');
+const { env, runNovaCode, runREPLNovaCode } = require('./nova.js');
+/**
+ * Formats a given JavaScript code string to improve readability by
+ * adding consistent spacing and applying basic indentation rules,
+ * while preserving content within string literals and comments.
+ *
+ * @param {string} code The code string to format.
+ * @returns {string} The formatted code string.
+ */
+function formatCodeForReadability(code) {
+  let formattedCode = code;
+  const stringPlaceholders = [];
+  const commentPlaceholders = [];
+  let placeholderIndex = 0;
+
+  // --- Step 0: Protect String Literals and Comments ---
+  formattedCode = formattedCode.replace(/\/\*[\s\S]*?\*\//g, (match) => {
+    const placeholder = `__COMMENT_PLACEHOLDER_${placeholderIndex}__`;
+    commentPlaceholders.push({ placeholder: placeholder, original: match });
+    placeholderIndex++;
+    return placeholder;
+  });
+
+  formattedCode = formattedCode.replace(/\/\/[^\n]*/g, (match) => {
+    const placeholder = `__COMMENT_PLACEHOLDER_${placeholderIndex}__`;
+    commentPlaceholders.push({ placeholder: placeholder, original: match });
+    placeholderIndex++;
+    return placeholder;
+  });
+
+  formattedCode = formattedCode.replace(/(["'`])((?:(?!\1)[^\\]|\\.)*)\1/g, (match) => {
+    const placeholder = `__STRING_PLACEHOLDER_${placeholderIndex}__`;
+    stringPlaceholders.push({ placeholder: placeholder, original: match });
+    placeholderIndex++;
+    return placeholder;
+  });
+
+  formattedCode = formattedCode
+    .replace(/(?<!\\)\r?\n/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/([=!<>+\-*/%&|^~?:]+)/g, ' $1 ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s*;\s*/g, ';\n')
+    .replace(/:\s*(?!=)\s*(?!:)/g, ': ')
+    .replace(/\s*([)\]}])/g, '$1')
+    .replace(/([([{])\s*/g, '$1')
+    .replace(/(\b(?:if|for|while|function|catch|else|class|return|try|do|const|let|var)\b)(?![({[a-zA-Z0-9_$])/g, '$1 ')
+    .replace(/(\S)\{/g, '$1 {')
+    .replace(/\{\s*(\S)/g, '{\n$1')
+    .replace(/(\S)\s*\}/g, '$1\n}')
+    .replace(/\}\s*(?!else|catch|finally|[,.;\)])/g, '}\n')
+    .replace(/([a-zA-Z0-9_$])\(/g, '$1 (')
+    .replace(/,(\S)/g, ',\n$1')
+    .replace(/\(\s*\)/g, '()')
+    .replace(/\[\s*\]/g, '[]')
+    .replace(/\{\s*\}/g, '{}')
+    .trim();
+
+  let lines = formattedCode.split('\n').filter(line => line.trim() !== '');
+  let indentLevel = 0;
+  const indentSize = 2;
+  const indentChar = ' ';
+  const formattedLines = [];
+
+  lines.forEach(line => {
+    let trimmedLine = line.trim();
+    let currentLineIndent = '';
+    const decreasesIndent = trimmedLine.startsWith('}') || trimmedLine.startsWith(']') || trimmedLine.startsWith(')');
+    if (decreasesIndent) {
+      if (indentLevel > 0) {
+        indentLevel--;
+      }
+    }
+    currentLineIndent = indentChar.repeat(indentLevel * indentSize);
+    formattedLines.push(currentLineIndent + trimmedLine);
+    const increasesIndent = trimmedLine.endsWith('{') || trimmedLine.endsWith('[') || trimmedLine.endsWith('(') && !trimmedLine.startsWith('return');
+    if (increasesIndent && !trimmedLine.endsWith('{}') && !trimmedLine.endsWith('[]') && !trimmedLine.endsWith('()')) {
+      indentLevel++;
+    }
+  });
+
+  let finalFormattedCode = formattedLines.join('\n')
+    .replace(/\n\s*\n/g, '\n\n')
+    .trim();
+
+  commentPlaceholders.forEach(item => {
+    finalFormattedCode = finalFormattedCode.replace(item.placeholder, item.original);
+  });
+
+  stringPlaceholders.forEach(item => {
+    finalFormattedCode = finalFormattedCode.replace(item.placeholder, item.original);
+  });
+
+  return finalFormattedCode;
+}
+
+function showHelpMsg() {
+  console.log(`
+  █████ NOVA REPL v${env.version} █████
+------------------------------------------
+
+Welcome to nova repl v${env.version}, here are your available REPL commands:
+
+1 - .exit   => Exit the REPL (or use CTRL+C)
+2 - .clear  => Clear the console screen
+3 - .help   => Show this help message
+
+--- Custom Commands ---`);
+
+  Object.keys(env.commands).forEach(cmd => {
+    const help = env.commands[cmd].helpMsg || '(no help message)';
+    console.log(`${cmd.padEnd(10)} => ${help}`);
+  });
+
+  console.log('\n......more will soon be added\n');
+}
+
+const program = new Command();
+program.version(env.version);
+
+program
+  .command('repl')
+  .description('Start the nova REPL')
+  .option('-u, --using <key>', 'Add a key to env.options with value true')
+  .option('-E, --expr', 'use expression evaluation.')
+  .action((options) => {
+  if (options.using) env.options[options.using] = true;
+   startRepl({ isExpr: !!options.expr });
+  });
+
+const { execSync } = require('child_process');
+
+program
+  .command('exec <code>')
+  .description('Execute inline code')
+  .option('-b, --use-bytecode', 'Use bytecode execution')
+  .action((code, options) => {
+    if (options.useBytecode && typeof env.execNVBC === 'function') {
+      env.execNVBC(code);
+    } else {
+      runNovaCode(code);
+    }
+    process.exit(0);
+  });
+
+program
+  .command('update')
+  .description('Update the nvlang package')
+  .action(() => {
+    const path = __dirname;  // Get the current directory
+
+    // Check if it's globally installed by using npm root -g
+    const globalPath = execSync('npm root -g', { encoding: 'utf8' }).trim();
+    const isGlobal = path.startsWith(globalPath);  // Check if current path is inside the global directory
+
+    // Remove the existing nvlang directory
+    execSync(`rm -rf ${require('path').join(path, '..')}`);
+
+    // Install the package
+    const installCommand = isGlobal ? 'npm install -g nvlang' : 'npm install nvlang';
+    execSync(installCommand, { stdio: 'inherit' });
+
+    process.exit(0);
+  });
+program
+  .command('tokenize <input> [output]')
+  .description('Tokenize a file')
+  .action((input, output) => {
+    const code = fs.readFileSync(path.resolve(input), 'utf8');
+    if (output) {
+      fs.writeFileSync(path.resolve(output), '//pre_tokens \n' + env.tokenize(code).tokens.join(' '));
+    } else {
+      console.log("tokens: " + "\n" + env.tokenize(code).tokens + "\n" + "Cleaned: " + "\n" + env.tokenize(code).code + "\n" + "Perfected: " + "\n" + env.tokenize(code).tokens.join(' ') + '\n');
+    }
+  });
+
+program
+  .command('clean <input> [output]')
+  .description('Clean a file')
+  .action((input, output) => {
+    const code = fs.readFileSync(path.resolve(input), 'utf8');
+    fs.writeFileSync(path.resolve(output), env.tokenize(code).code);
+  });
+
+program
+  .command('format <input> [output]')
+  .description('Format a file for readability')
+  .action((input, output) => {
+    const code = fs.readFileSync(path.resolve(input), 'utf8');
+    fs.writeFileSync(path.resolve(output), formatCodeForReadability(env.tokenize(code).cleaned));
+  });
+
+program
+  .command('ir <input> [output]')
+  .description('Format a file for IR readability')
+  .action((input, output) => {
+    const code = fs.readFileSync(path.resolve(input), 'utf8');
+    fs.writeFileSync(path.resolve(output), formatCodeForReadability(env.tokenize(code).code));
+  });
+
+program
+  .command('read <input>')
+  .description('Read and test a file')
+  .action((input) => {
+    const code = fs.readFileSync(path.resolve(input), 'utf8');
+    let CodeStatus = "Good";
+    let testPer = 75;
+    let TestMsg = "Keep doing good."
+    let Status = "Test Sucsessful";
+    if (env.tokenize(code).tokens.join(' ') === code) {
+      testPer = 100;
+    } else {
+      testPer -= 25;
+    }
+    if (env.tokenize(code).code === code) {
+      testPer += 10;
+    } else {
+      testPer -= 30;
+    }
+    if (formatCodeForReadability(code) === code) {
+      testPer += 45;
+    } else {
+      testPer -= 10;
+    }
+    if (testPer >= 100) testPer = 100;
+    if (testPer <= 0) testPer = 0;
+    if (testPer === 100) {
+      CodeStatus = "Perfect";
+      TestMsg = "how did you do that? keep going!"
+      Status = "Test Sucesseded Perfectly"
+    } else if (testPer >= 50) {
+      // No change
+    } else {
+      CodeStatus = "Bad";
+      TestMsg = "Test did not go well, maybe you can make it better?";
+      Status = "Test Failed..."
+    }
+    console.log(CodeStatus + ': ' + testPer + '%, ' + TestMsg + '\n' + Status);
+  });
+
+program
+  .command('compile-bytecode <input> [output]')
+  .description('compile a file to bytecode')
+  .action((input,output) => {
+    const code = fs.readFileSync(path.resolve(input), 'utf8');
+    fs.writeFileSync(path.resolve(output), env.compileTokensToBytecode(env.tokenize(code).tokens).join(' '));
+  });
+
+env.maps.cli = env.maps.cli || {};
+env.maps.cli.args = [];
+env.maps.cli.options = {};
+
+// Setup Commander
+program
+  .argument('[file]')
+  .argument('[args...]')
+  .option('-b, --use-bytecode', 'Use bytecode execution')
+  .option('-d, --debug', 'Use debugger')
+  .option('-u, --using <key>', 'Add a key to env.options with value true')
+  .option('-E, --expr', 'use expression evaluation.')
+  .option('-o, --optimize', 'Run Nova in hyper-optimized V8 mode')
+  .option('-B, --node-jitless', 'Run Nova in jitless V8 mode (highly unrecomended)')
+  .allowUnknownOption(true) // allow extra options
+  .passThroughOptions()
+  .action((file, args, options, command) => {
+    // Store positional arguments
+    env.maps.cli.args = args.filter((a) => !a.startsWith('-')) || [];
+// Hyper-optimized V8 mode
+if (options.optimize) {
+const v8 = require('v8');
+v8.setFlagsFromString('--allow-natives-syntax'); // ✅ works
+v8.setFlagsFromString('--opt');                  // ✅ works
+v8.setFlagsFromString('--max-old-space-size=4096'); // ✅ works
+}
+if (options.nodeJitless) {
+const v8 = require('v8');
+v8.setFlagsFromString('--jitless');                  // ✅ works
+}
+    // Start with known options
+    env.maps.cli.options = { ...options };
+
+
+
+    // Capture unknown / extra options
+    const unknown = process.argv.slice(2).slice(options.length); // array
+    for (let i = 0; i < unknown.length; i++) {
+      const arg = unknown[i];
+      if (arg.startsWith('--')) {
+        const key = arg.slice(2);
+        const next = unknown[i + 1];
+        if (next && !next.startsWith('-')) {
+          env.maps.cli.options[key] = next;
+          i++; // skip next
+        } else {
+          env.maps.cli.options[key] = true;
+        }
+      } else if (arg.startsWith('-')) {
+        const key = arg.slice(1);
+        env.maps.cli.options[key] = true;
+      }
+    }
+
+    if (options.debug) env.options['debugger'] = true;
+    if (options.using) env.options[options.using] = true;
+
+    if (!file) {
+     startRepl({ isExpr: !!options.expr });
+     return;
+    }
+
+    const code = fs.readFileSync(path.resolve(file), 'utf8');
+    const useBytecode = options.useBytecode;
+
+    if (useBytecode && typeof env.execNVBC === 'function') {
+      env.execNVBC(code);
+    } else {
+      runREPLNovaCode(code);
+    }
+  });
+
+program.parse(process.argv);
+
+function startRepl(options) {
+  env.options['logExprs'] = true
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: true
+  });
+  console.log(`Welcome to nova REPL v${env.version}, type more or .exit, or .help for the list of avaible REPL commands`);
+  rl.setPrompt('> ');
+  rl.prompt();
+  let buffer = '';
+
+  rl.on('line', (line) => {
+    if (line.trim() === '.exit') return process.exit(0);
+    if (line.trim() === '.clear') { console.clear(); return rl.prompt(); }
+    if (line.trim() === '.help') { showHelpMsg(); return rl.prompt(); }
+
+    if (line.endsWith('\\')) {
+      buffer += line.slice(0, -1) + '\n';
+      rl.setPrompt('... ');
+      rl.prompt();
+      return;
+    }
+
+    buffer += line;
+    const fullInput = buffer.trim();
+    buffer = '';
+    rl.setPrompt('> ');
+
+    if (env.commands[fullInput]) {
+      env.commands[fullInput].fn();
+    } else {
+      if (options.isExpr) console.log(env.evaluateExpr(line))
+      else runREPLNovaCode(line);
+    }
+    env.macros['LAST_LINE__'] = line;
+    rl.prompt();
+  });
+  let sigintCount = 0;
+  rl.on('SIGINT', () => {
+    sigintCount++;
+    if (sigintCount === 1) {
+      console.log('\n(To exit, press Ctrl+C again or type .exit)');
+      rl.prompt(); // Keep the prompt
+    } else if (sigintCount === 2) {
+      rl.close(); // Close the REPL on second Ctrl+C
+    }
+  });
+
+  rl.on('line', () => sigintCount = 0);
+
+  // Handle Ctrl+D (EOF - end of file)
+  rl.on('close', () => {
+    console.log('\nExiting Nova REPL.'); // Message on exit
+    process.exit(0);
+  });
+}

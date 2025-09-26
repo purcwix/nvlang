@@ -1,0 +1,13 @@
+{
+  "license_version": "nv-prem v0.3 (StepWizard)",
+  "declared_intent": {
+    "mess": "interpreter",
+    "doToSrc": "see"
+  },
+  "result": "allowed",
+  "reason": "interpreter view allowed",
+  "contact": null,
+  "license_id": "NV-EYIT56WV",
+  "token": "nv-prem:interpreter:level0:ca7b3bb4",
+  "issued_at": "2025-08-10T20:38:33.552Z"
+}

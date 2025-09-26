@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/data/data/com.termux/files/usr/lib/node_modules/nvlang/natives/types/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

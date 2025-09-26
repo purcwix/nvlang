@@ -1,0 +1,195 @@
+#!/usr/bin/env node
+
+// bin/nvp - Nova Version Plus Interpreter Shell
+// A hardcore command shell language, built for nv+, bash-style.
+
+// Core modules
+const fs = require('fs');
+const path = require('path');
+const readline = require('readline');
+
+// Runtime state
+const args = process.argv.slice(2);
+const variables = {};
+const aliases = {};
+const functions = {};
+
+// Core parser
+function parse(line, ctx = {}) {
+  // Variable replacement
+  line = line.replace(/\$([\w]+)/g, (_, name) =>
+    ctx[name] ?? variables[name] ?? process.env[name] ?? `$${name}`
+  );
+
+  // Alias resolution
+  if (aliases[line.trim()]) {
+    return parse(aliases[line.trim()], ctx);
+  }
+
+  const tokens = line.trim().split(/\s+/);
+  const cmd = tokens[0];
+  const args = tokens.slice(1);
+
+  switch (cmd) {
+    case 'print':
+      console.log(args.join(' '));
+      break;
+
+    case 'set':
+      if (args.length >= 2) variables[args[0]] = args.slice(1).join(' ');
+      break;
+
+    case 'cd':
+      process.chdir(args[0] || process.env.HOME);
+      break;
+
+    case 'ls':
+      console.log(fs.readdirSync(process.cwd()).join('\n'));
+      break;
+
+    case 'alias':
+      aliases[args[0]] = args.slice(2).join(' ');
+      break;
+
+    case 'include': {
+      const file = args[0];
+      if (fs.existsSync(file)) {
+        runScript(fs.readFileSync(file, 'utf8'));
+      } else {
+        console.error(`Include failed: ${file} not found`);
+      }
+      break;
+    }
+
+    case 'help': {
+  console.log(`
+Welcome to the NVP Shell — Nova Version Plus
+Built for nvOS. 
+
+Available Commands:
+  print [msg]        ➤ Print a message
+  set VAR value      ➤ Set a variable
+  $VAR               ➤ Access a variable
+  cd [dir]           ➤ Change directory
+  ls                 ➤ List files in current directory
+  alias NAME = CMD   ➤ Define command shortcut
+  include [file]     ➤ Load and run another .nvp file
+  def NAME ... end   ➤ Define a function
+  call NAME          ➤ Call a defined function
+  loop N ... end     ➤ Run block N times
+  if VAR == VAL ... end ➤ Run block if condition matches
+  help               ➤ Show this message
+  exit               ➤ Exit the shell
+
+This shell runs interactively, or via scripts:
+  $ nvp script.nvp
+
+Welcome to the core of nvOS.
+  `);
+  break;
+}
+
+    case 'loop': {
+      const count = parseInt(args[0], 10);
+      const loopBody = [];
+      ctx.rl.setPrompt('... ');
+      const loopHandler = (inner) => {
+        if (inner.trim() === 'end') {
+          ctx.rl.removeListener('line', loopHandler);
+          for (let i = 0; i < count; i++) {
+            loopBody.forEach(line => parse(line, { ...ctx, i }));
+          }
+          ctx.rl.setPrompt('nvp> ');
+          ctx.rl.prompt();
+        } else {
+          loopBody.push(inner);
+        }
+      };
+      ctx.rl.on('line', loopHandler);
+      return true;
+    }
+
+    case 'if': {
+      const [varname, op, ...valueParts] = args;
+      const value = valueParts.join(' ');
+      const actual = variables[varname];
+      const condition = (op === '==' && actual == value);
+      const body = [];
+      ctx.rl.setPrompt('... ');
+      const ifHandler = (inner) => {
+        if (inner.trim() === 'end') {
+          ctx.rl.removeListener('line', ifHandler);
+          if (condition) body.forEach(line => parse(line, ctx));
+          ctx.rl.setPrompt('nvp> ');
+          ctx.rl.prompt();
+        } else {
+          body.push(inner);
+        }
+      };
+      ctx.rl.on('line', ifHandler);
+      return true;
+    }
+
+    case 'def': {
+      const name = args[0];
+      const body = [];
+      ctx.rl.setPrompt('... ');
+      const fnHandler = (inner) => {
+        if (inner.trim() === 'end') {
+          ctx.rl.removeListener('line', fnHandler);
+          functions[name] = () => body.forEach(line => parse(line, ctx));
+          ctx.rl.setPrompt('nvp> ');
+          ctx.rl.prompt();
+        } else {
+          body.push(inner);
+        }
+      };
+      ctx.rl.on('line', fnHandler);
+      return true;
+    }
+
+    case 'call': {
+      const fname = args[0];
+      if (functions[fname]) {
+        functions[fname]();
+      } else {
+        console.error(`Function not found: ${fname}`);
+      }
+      break;
+    }
+
+    default:
+      if (cmd) console.log(`Unknown command: ${cmd}`);
+  }
+
+  return false;
+}
+
+// Script runner
+function runScript(script) {
+  script.split(/\r?\n/).forEach(line => parse(line));
+}
+
+// File input
+if (args.length > 0 && fs.existsSync(args[0])) {
+  runScript(fs.readFileSync(args[0], 'utf8'));
+  process.exit(0);
+}
+
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  prompt: '$ '
+});
+
+rl.prompt();
+
+rl.on('line', (line) => {
+  const result = parse(line, { rl });
+  if (!result) rl.prompt();
+});
+
+rl.on('close', () => {
+  process.exit(0);
+});

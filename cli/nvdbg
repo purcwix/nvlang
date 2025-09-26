@@ -1,0 +1,127 @@
+#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const { env } = require('./nova.js');
+
+const args = process.argv.slice(2);
+
+if (args.length === 0) {
+  console.error('Usage: nvdbg <file.nv> [options]');
+  process.exit(1);
+}
+
+let filename = null;
+let filterKeys = null;
+let excludeKeys = null;
+let outFile = null;
+let grepTerm = null;
+let compact = false;
+let keyOnly = false;
+let listKeys = false;
+let quiet = false;
+
+// === Parse Args ===
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+
+  if (!arg.startsWith('--') && !filename) {
+    filename = path.resolve(arg);
+  } else if (arg === '--filter') {
+    filterKeys = args[++i]?.split(',').map(k => k.trim()) || [];
+  } else if (arg === '--exclude') {
+    excludeKeys = args[++i]?.split(',').map(k => k.trim()) || [];
+  } else if (arg === '--out') {
+    outFile = args[++i];
+  } else if (arg === '--grep') {
+    grepTerm = args[++i];
+  } else if (arg === '--json-compact') {
+    compact = true;
+  } else if (arg === '--key-only') {
+    keyOnly = true;
+  } else if (arg === '--list-keys') {
+    listKeys = true;
+  } else if (arg === '--quiet') {
+    quiet = true;
+  }
+}
+
+if (!filename) {
+  console.error('❌ No file specified.');
+  process.exit(1);
+}
+
+// === Load Code ===
+let code;
+try {
+  code = fs.readFileSync(filename, 'utf8');
+} catch (err) {
+  console.error(`❌ Failed to read file: ${filename}`);
+  console.error(err.message || err);
+  process.exit(1);
+}
+
+// === Run Nova Code ===
+try {
+  env.run(code);
+  const result = {};
+
+  for (const key in env) {
+    if (
+      Object.prototype.hasOwnProperty.call(env, key) &&
+      typeof env[key] !== 'function'
+    ) {
+      const include =
+        (!filterKeys || filterKeys.includes(key)) &&
+        (!excludeKeys || !excludeKeys.includes(key));
+
+      if (include) result[key] = env[key];
+    }
+  }
+
+  // === Handle list-keys ===
+  if (listKeys) {
+    Object.keys(result).forEach(k => console.log(k));
+    process.exit(0);
+  }
+
+  // === Handle key-only ===
+  if (keyOnly) {
+    console.log(JSON.stringify(Object.keys(result), null, 2));
+    process.exit(0);
+  }
+
+  // === Handle grep ===
+  if (grepTerm) {
+    const filtered = {};
+    for (const k in result) {
+      if (
+        k.includes(grepTerm) ||
+        JSON.stringify(result[k]).includes(grepTerm)
+      ) {
+        filtered[k] = result[k];
+      }
+    }
+    output(filtered);
+  } else {
+    output(result);
+  }
+} catch (e) {
+  console.error('❌ Error while running Nova code:\n', e.message || e);
+  process.exit(1);
+}
+
+// === Output Handler ===
+function output(obj) {
+  if (quiet) return;
+
+  const data = compact
+    ? JSON.stringify(obj)
+    : JSON.stringify(obj, null, 2);
+
+  if (outFile) {
+    fs.writeFileSync(outFile, data, 'utf8');
+    console.log(`✅ Output written to ${outFile}`);
+  } else {
+    console.log(data);
+  }
+}
